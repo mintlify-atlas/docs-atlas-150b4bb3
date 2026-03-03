@@ -1,0 +1,307 @@
+---
+title: rampart allow
+description: Add allow rules to your custom policy
+---
+
+Add a glob pattern as an explicit allow rule in your custom policy.
+
+## Usage
+
+```bash
+rampart allow <pattern> [flags]
+```
+
+## Arguments
+
+**`pattern`** (required)
+
+Glob pattern to match against commands (exec tool) or file paths (read/write/edit).
+
+## Flags
+
+<ParamField path="--global" type="boolean" default="false">
+  Write to global policy (`~/.rampart/policies/custom.yaml`)
+</ParamField>
+
+<ParamField path="--project" type="boolean" default="false">
+  Write to project policy (`.rampart/policy.yaml`)
+</ParamField>
+
+<ParamField path="--tool" type="string" default="auto-detect">
+  Tool type: `exec`, `read`, `write`, `edit` (default: auto-detect from pattern)
+</ParamField>
+
+<ParamField path="--message" type="string">
+  Optional reason displayed when the rule matches
+</ParamField>
+
+<ParamField path="-y, --yes" type="boolean" default="false">
+  Skip confirmation prompt
+</ParamField>
+
+<ParamField path="--api" type="string" default="http://127.0.0.1:9090">
+  Rampart serve API address for policy reload
+</ParamField>
+
+<ParamField path="--token" type="string">
+  API auth token (or set `RAMPART_TOKEN`)
+</ParamField>
+
+## Pattern matching
+
+Patterns are matched against:
+- **Commands** (exec tool): `npm install *`, `git push`, etc.
+- **File paths** (read/write/edit): `/tmp/**`, `*.env`, etc.
+
+Rampart auto-detects whether the pattern is a command or path based on whether it contains a `/`.
+
+## Examples
+
+### Allow npm install
+
+```bash
+rampart allow "npm install *"
+```
+
+```
+  Adding rule to project policy (.rampart/policy.yaml):
+
+    Action:  allow
+    Pattern: npm install *
+    Tool:    exec
+
+  Add this rule? [y/N] y
+
+  ✓ Rule added to policy.yaml
+
+  Policy reloaded (12 rules active)
+```
+
+### Allow Go tests
+
+```bash
+rampart allow "go test ./..."
+```
+
+### Allow writing to /tmp
+
+```bash
+rampart allow "/tmp/**"
+```
+
+```
+  Adding rule to project policy (.rampart/policy.yaml):
+
+    Action:  allow
+    Pattern: /tmp/**
+    Tool:    read
+
+  Add this rule? [y/N] y
+
+  ✓ Rule added to policy.yaml
+```
+
+Note: Auto-detected as `read` tool because the pattern starts with `/`.
+
+### Allow with custom message
+
+```bash
+rampart allow "curl https://api.example.com/*" \
+  --message "API calls to example.com are safe"
+```
+
+### Non-interactive (CI)
+
+```bash
+rampart allow "make build" --yes
+```
+
+### Force tool type
+
+```bash
+rampart allow "build.sh" --tool exec
+```
+
+Without `--tool exec`, this would be auto-detected as a path rule.
+
+## Target selection
+
+By default, Rampart writes to:
+- **Project policy** (`.rampart/policy.yaml`) if in a git repo
+- **Global policy** (`~/.rampart/policies/custom.yaml`) otherwise
+
+Override with flags:
+
+```bash
+# Force global
+rampart allow "npm test" --global
+
+# Force project
+rampart allow "npm test" --project
+```
+
+## Pattern syntax
+
+### Wildcards
+
+- `*` — Match any characters except `/`
+- `**` — Match any characters including `/`
+- `?` — Match a single character
+- `[abc]` — Match any character in the set
+- `[a-z]` — Match any character in the range
+
+### Examples
+
+```bash
+# Match any npm command
+rampart allow "npm *"
+
+# Match all .env files
+rampart allow "**/.env"
+
+# Match specific file
+rampart allow "/etc/hosts"
+
+# Match directories
+rampart allow "~/projects/**"
+```
+
+## Warnings
+
+Rampart warns about overly permissive patterns:
+
+```bash
+rampart allow "**"
+```
+
+```
+  Adding rule to project policy (.rampart/policy.yaml):
+
+    Action:  allow
+    Pattern: **
+    Tool:    exec
+
+  ⚠️  Warning: Overly permissive pattern
+     • matches ALL commands/paths — effectively disables policy
+
+  Add this rule? [y/N]
+```
+
+**Patterns that trigger warnings:**
+- `*`, `**`, `**/**` — Match everything
+- `/*`, `/**` — Match all paths under `/`
+- `~/*`, `~/**` — Match all paths under home directory
+
+## Policy reload
+
+If `rampart serve` is running, the policy is automatically reloaded:
+
+```
+✓ Rule added to custom.yaml
+
+Policy reloaded (15 rules active)
+```
+
+If serve is not running:
+
+```
+Saved to ~/.rampart/policies/custom.yaml
+(Run 'rampart serve' to activate changes immediately)
+```
+
+## Use cases
+
+### Whitelist development commands
+
+```bash
+rampart allow "npm *"
+rampart allow "yarn *"
+rampart allow "pnpm *"
+rampart allow "go *"
+rampart allow "cargo *"
+```
+
+### Allow CI scripts
+
+```bash
+rampart allow "./scripts/deploy.sh" --global --yes
+rampart allow "make deploy" --global --yes
+```
+
+### Allow temporary file writes
+
+```bash
+rampart allow "/tmp/**"
+rampart allow "~/Downloads/**"
+```
+
+### Allow API calls
+
+```bash
+rampart allow "curl https://api.github.com/*"
+rampart allow "curl https://api.example.com/*"
+```
+
+## Troubleshooting
+
+### Pattern already exists
+
+```
+⚠️  Pattern already exists: allow exec "npm install *"
+Use 'rampart rules' to view existing rules.
+```
+
+The pattern is already in your custom policy. Remove it first:
+
+```bash
+rampart rules remove <index>
+```
+
+### Invalid pattern
+
+```
+invalid glob pattern: missing closing bracket ']'
+```
+
+Fix the pattern syntax:
+
+```bash
+# Bad
+rampart allow "file[a-z"
+
+# Good
+rampart allow "file[a-z]"
+```
+
+### Policy not reloaded
+
+```
+Saved to custom.yaml
+(Run 'rampart serve' to activate changes immediately)
+```
+
+Start the serve daemon:
+
+```bash
+rampart serve install
+```
+
+### Mutual exclusion error
+
+```
+--global and --project are mutually exclusive
+```
+
+Choose one:
+
+```bash
+rampart allow "npm test" --global
+# OR
+rampart allow "npm test" --project
+```
+
+## See also
+
+- [rampart block](/cli/block) - Add deny rules
+- [rampart rules](/cli/rules) - List and manage custom rules
+- [rampart policy](/cli/policy) - Policy management

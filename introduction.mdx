@@ -35,7 +35,22 @@ Every command Claude executes goes through Rampart's policy engine first:
 
 <CardGroup cols={2}>
   <Card title="Native agent integration" icon="plug" href="/quickstart">
-    Built-in support for Claude Code, Cline, OpenClaw, and universal wrapping for any agent
+    Claude Code, Cline, OpenClaw, Codex — or wrap any agent with shell interception
+  </Card>
+  <Card title="Microsecond policy engine" icon="gauge-high" href="/policies/writing-policies">
+    Pattern matching evaluates 95%+ of decisions in single-digit microseconds
+  </Card>
+  <Card title="Hash-chained audit trail" icon="link" href="/features/audit-trail">
+    Tamper-evident JSONL audit logs with SIEM integration (syslog/CEF)
+  </Card>
+  <Card title="Human-in-the-loop approvals" icon="circle-check" href="/features/approval-flow">
+    Native approval prompts for Claude Code, dashboard for other agents
+  </Card>
+  <Card title="Live monitoring dashboard" icon="display" href="/features/live-dashboard">
+    Real-time TUI and web dashboard with policy testing and approval management
+  </Card>
+  <Card title="Project-local policies" icon="folder" href="/policies/project-policies">
+    Commit `.rampart/policy.yaml` to your repo for team-shared security rules
   </Card>
   <Card title="Microsecond policy engine" icon="gauge-high" href="/core/policies">
     Pattern matching evaluates 95%+ of decisions in single-digit microseconds
@@ -88,10 +103,10 @@ For a complete threat model analysis, see [THREAT-MODEL.md](https://github.com/p
   <Card title="Quick start" icon="rocket" href="/quickstart">
     Get up and running in under 2 minutes
   </Card>
-  <Card title="Writing policies" icon="file-lines" href="/core/policies">
+  <Card title="Writing policies" icon="file-lines" href="/policies/writing-policies">
     Learn how to write YAML policies for your agent
   </Card>
-  <Card title="CLI reference" icon="terminal" href="/reference/cli">
+  <Card title="CLI reference" icon="terminal" href="/cli/overview">
     Complete command reference for all Rampart commands
   </Card>
 </CardGroup>

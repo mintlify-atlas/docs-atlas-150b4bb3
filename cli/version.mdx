@@ -1,0 +1,241 @@
+---
+title: rampart version
+description: Print build and runtime version information
+---
+
+Display Rampart version, build information, and Go runtime version.
+
+## Usage
+
+```bash
+rampart version
+```
+
+## Output
+
+```
+rampart v0.7.0 (a1b2c3d4) built 2026-03-01T10:30:00Z
+Go go1.24.0
+```
+
+**Fields:**
+- **Version**: Rampart version (e.g., `v0.7.0`)
+- **Commit**: Git commit hash (short, 8 chars)
+- **Build time**: UTC timestamp when binary was compiled
+- **Go version**: Go compiler version
+
+## Examples
+
+### Check version
+
+```bash
+rampart version
+```
+
+```
+rampart v0.7.0 (a1b2c3d4) built 2026-03-01T10:30:00Z
+Go go1.24.0
+```
+
+### Development build
+
+```bash
+rampart version
+```
+
+```
+rampart dev (uncommitted) built 2026-03-03T15:04:05Z
+Go go1.24.0
+```
+
+`dev` indicates a local build from source.
+
+### Extract version (scripts)
+
+```bash
+rampart version | head -1 | awk '{print $2}'
+```
+
+```
+v0.7.0
+```
+
+### Version in CI
+
+```bash
+VERSION=$(rampart version | head -1 | awk '{print $2}')
+echo "Running Rampart $VERSION"
+```
+
+## Use cases
+
+### Verify installation
+
+```bash
+rampart version
+```
+
+Check that Rampart is installed and in PATH.
+
+### Check for updates
+
+```bash
+rampart version
+# rampart v0.6.5 (old version)
+
+rampart upgrade
+rampart version
+# rampart v0.7.0 (latest)
+```
+
+### Bug reports
+
+When reporting bugs, include version output:
+
+```bash
+rampart version
+# rampart v0.7.0 (a1b2c3d4) built 2026-03-01T10:30:00Z
+# Go go1.24.0
+
+# Then report issue with version info
+```
+
+### CI logs
+
+```bash
+#!/bin/bash
+# Log version in CI runs
+echo "CI run starting"
+rampart version
+```
+
+### Compatibility checks
+
+```bash
+#!/bin/bash
+VERSION=$(rampart version | head -1 | awk '{print $2}' | sed 's/^v//')
+MINIMUM="0.7.0"
+
+if [ "$(printf '%s\n' "$MINIMUM" "$VERSION" | sort -V | head -1)" != "$MINIMUM" ]; then
+  echo "Rampart $VERSION is too old. Minimum: $MINIMUM"
+  exit 1
+fi
+```
+
+## Version scheme
+
+Rampart follows [Semantic Versioning](https://semver.org/):
+
+```
+v<MAJOR>.<MINOR>.<PATCH>
+```
+
+**Examples:**
+- `v0.7.0` — Minor release (new features)
+- `v0.7.1` — Patch release (bug fixes)
+- `v1.0.0` — Major release (breaking changes)
+
+### Breaking changes
+
+Major version bumps (e.g., `v1.0.0` → `v2.0.0`) indicate breaking changes:
+- Policy format changes
+- CLI flag changes
+- API changes
+
+### Feature releases
+
+Minor version bumps (e.g., `v0.7.0` → `v0.8.0`) add new features:
+- New commands
+- New policy features
+- New agent integrations
+
+### Bug fixes
+
+Patch version bumps (e.g., `v0.7.0` → `v0.7.1`) fix bugs:
+- Security patches
+- Bug fixes
+- Performance improvements
+
+## Development builds
+
+Building from source produces `dev` versions:
+
+```bash
+git clone https://github.com/peg/rampart.git
+cd rampart
+go build -o rampart ./cmd/rampart
+./rampart version
+```
+
+```
+rampart dev (uncommitted) built 2026-03-03T15:04:05Z
+Go go1.24.0
+```
+
+Development builds:
+- Use `dev` instead of version number
+- Show `uncommitted` if there are uncommitted changes
+- Include local build timestamp
+
+## Troubleshooting
+
+### Command not found
+
+```bash
+rampart version
+# bash: rampart: command not found
+```
+
+Rampart is not installed or not in PATH. Install:
+
+```bash
+# Homebrew
+brew install rampart
+
+# Or download from releases
+curl -sSL https://rampart.sh/install | bash
+```
+
+### Old version
+
+```bash
+rampart version
+# rampart v0.5.0 (old version)
+```
+
+Upgrade:
+
+```bash
+rampart upgrade
+rampart version
+# rampart v0.7.0
+```
+
+### Version mismatch
+
+If you have multiple Rampart binaries:
+
+```bash
+which -a rampart
+# /usr/local/bin/rampart
+# /opt/homebrew/bin/rampart
+
+/usr/local/bin/rampart version
+# rampart v0.6.0
+
+/opt/homebrew/bin/rampart version
+# rampart v0.7.0
+```
+
+Remove old version:
+
+```bash
+sudo rm /usr/local/bin/rampart
+rampart version
+# rampart v0.7.0
+```
+
+## See also
+
+- [rampart upgrade](/cli/upgrade) - Upgrade to latest version
+- [rampart doctor](/cli/doctor) - Health check (includes version check)

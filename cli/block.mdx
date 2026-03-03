@@ -1,0 +1,317 @@
+---
+title: rampart block
+description: Add deny rules to your custom policy
+---
+
+Add a glob pattern as an explicit deny rule in your custom policy.
+
+## Usage
+
+```bash
+rampart block <pattern> [flags]
+```
+
+## Arguments
+
+**`pattern`** (required)
+
+Glob pattern to match against commands (exec tool) or file paths (read/write/edit).
+
+## Flags
+
+<ParamField path="--global" type="boolean" default="false">
+  Write to global policy (`~/.rampart/policies/custom.yaml`)
+</ParamField>
+
+<ParamField path="--project" type="boolean" default="false">
+  Write to project policy (`.rampart/policy.yaml`)
+</ParamField>
+
+<ParamField path="--tool" type="string" default="auto-detect">
+  Tool type: `exec`, `read`, `write`, `edit` (default: auto-detect from pattern)
+</ParamField>
+
+<ParamField path="--message" type="string">
+  Optional reason displayed when the rule matches
+</ParamField>
+
+<ParamField path="-y, --yes" type="boolean" default="false">
+  Skip confirmation prompt
+</ParamField>
+
+<ParamField path="--api" type="string" default="http://127.0.0.1:9090">
+  Rampart serve API address for policy reload
+</ParamField>
+
+<ParamField path="--token" type="string">
+  API auth token (or set `RAMPART_TOKEN`)
+</ParamField>
+
+## Examples
+
+### Block piped execution
+
+```bash
+rampart block "curl * | bash"
+```
+
+```
+  Adding rule to project policy (.rampart/policy.yaml):
+
+    Action:  deny
+    Pattern: curl * | bash
+    Tool:    exec
+
+  Add this rule? [y/N] y
+
+  ✓ Rule added to policy.yaml
+
+  Policy reloaded (12 rules active)
+```
+
+### Block destructive commands
+
+```bash
+rampart block "rm -rf *"
+rampart block "DROP TABLE *"
+rampart block "kubectl delete * --all-namespaces"
+```
+
+### Block writes to /etc
+
+```bash
+rampart block "/etc/**" --tool write
+```
+
+```
+  Adding rule to project policy (.rampart/policy.yaml):
+
+    Action:  deny
+    Pattern: /etc/**
+    Tool:    write
+
+  Add this rule? [y/N] y
+
+  ✓ Rule added to policy.yaml
+```
+
+### Block npm publish
+
+```bash
+rampart block "npm publish *" \
+  --message "Publishing requires manual approval"
+```
+
+### Non-interactive (CI)
+
+```bash
+rampart block "rm -rf /" --yes --global
+```
+
+## Pattern matching
+
+Patterns are matched against:
+- **Commands** (exec tool): `curl * | bash`, `rm -rf *`, etc.
+- **File paths** (read/write/edit): `/etc/**`, `~/.ssh/*`, etc.
+
+Rampart auto-detects whether the pattern is a command or path based on whether it contains a `/`.
+
+## Target selection
+
+By default, Rampart writes to:
+- **Project policy** (`.rampart/policy.yaml`) if in a git repo
+- **Global policy** (`~/.rampart/policies/custom.yaml`) otherwise
+
+Override with flags:
+
+```bash
+# Force global
+rampart block "curl * | bash" --global
+
+# Force project
+rampart block "rm -rf *" --project
+```
+
+## Pattern syntax
+
+### Wildcards
+
+- `*` — Match any characters except `/`
+- `**` — Match any characters including `/`
+- `?` — Match a single character
+- `[abc]` — Match any character in the set
+- `[a-z]` — Match any character in the range
+
+### Examples
+
+```bash
+# Block all curl commands
+rampart block "curl *"
+
+# Block all .env file reads
+rampart block "**/.env" --tool read
+
+# Block specific file writes
+rampart block "~/.ssh/authorized_keys" --tool write
+
+# Block directories
+rampart block "~/secrets/**"
+```
+
+## Common blocks
+
+### Credential theft
+
+```bash
+rampart block "curl -d @*.env *"
+rampart block "curl -d @*credentials* *"
+rampart block "cat ~/.ssh/id_rsa | *"
+```
+
+### Destructive operations
+
+```bash
+rampart block "rm -rf *"
+rampart block "sudo rm -rf *"
+rampart block "mkfs *"
+rampart block "dd if=/dev/zero *"
+```
+
+### Supply chain attacks
+
+```bash
+rampart block "npm publish *"
+rampart block "pip install --index-url http://*"
+rampart block "gem push *"
+```
+
+### Privilege escalation
+
+```bash
+rampart block "sudo *"
+rampart block "su *"
+rampart block "chmod +s *"
+```
+
+### SSH key tampering
+
+```bash
+rampart block "~/.ssh/authorized_keys" --tool write
+rampart block "~/.ssh/id_rsa" --tool write
+rampart block "/etc/ssh/sshd_config" --tool write
+```
+
+### Production database operations
+
+```bash
+rampart block "DROP TABLE *"
+rampart block "DELETE FROM * WHERE 1=1"
+rampart block "TRUNCATE TABLE *"
+rampart block "ALTER TABLE * DROP *"
+```
+
+## Policy reload
+
+If `rampart serve` is running, the policy is automatically reloaded:
+
+```
+✓ Rule added to custom.yaml
+
+Policy reloaded (15 rules active)
+```
+
+If serve is not running:
+
+```
+Saved to ~/.rampart/policies/custom.yaml
+(Run 'rampart serve' to activate changes immediately)
+```
+
+## Use cases
+
+### Team-shared blocks (project policy)
+
+```bash
+cd ~/my-project
+rampart block "npm publish *" --project
+rampart block "rm -rf node_modules" --project
+git add .rampart/policy.yaml
+git commit -m "Add Rampart project policy"
+```
+
+Now all team members will have these blocks.
+
+### Personal blocks (global policy)
+
+```bash
+rampart block "sudo rm -rf /" --global
+rampart block "curl * | bash" --global
+```
+
+Applies to all projects on your machine.
+
+### CI enforcement
+
+```bash
+#!/bin/bash
+# Add blocks before running agent
+rampart block "npm publish *" --yes --global
+rampart block "git push --force origin main" --yes --global
+
+# Run agent with policy enforced
+rampart wrap -- your-agent-command
+```
+
+## Troubleshooting
+
+### Pattern already exists
+
+```
+⚠️  Pattern already exists: deny exec "rm -rf *"
+Use 'rampart rules' to view existing rules.
+```
+
+The pattern is already in your custom policy.
+
+### Too broad
+
+```bash
+rampart block "**"
+```
+
+```
+  ⚠️  Warning: Overly permissive pattern
+     • matches ALL commands/paths — effectively disables policy
+
+  Add this rule? [y/N]
+```
+
+Avoid blocking everything. Be more specific:
+
+```bash
+# Bad
+rampart block "**"
+
+# Good
+rampart block "rm -rf *"
+rampart block "curl * | bash"
+```
+
+### Policy not reloaded
+
+```
+Saved to custom.yaml
+(Run 'rampart serve' to activate changes immediately)
+```
+
+Start the serve daemon:
+
+```bash
+rampart serve install
+```
+
+## See also
+
+- [rampart allow](/cli/allow) - Add allow rules
+- [rampart rules](/cli/rules) - List and manage custom rules
+- [rampart policy](/cli/policy) - Policy management

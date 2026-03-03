@@ -1,0 +1,250 @@
+---
+title: rampart uninstall
+description: Remove Rampart from this system
+---
+
+Clean uninstallation of Rampart by removing hooks, services, and PATH entries.
+
+## Usage
+
+```bash
+rampart uninstall [flags]
+```
+
+## Flags
+
+<ParamField path="-y, --yes" type="boolean" default="false">
+  Skip confirmation prompts
+</ParamField>
+
+## What it removes
+
+### 1. Agent hooks
+
+- **Claude Code**: Removes hooks from `~/.claude/settings.json`
+- **Cline**: Removes hooks from `~/Documents/Cline/Hooks/`
+- **OpenClaw**: Removes shim from `~/.local/bin/rampart-shim`
+
+### 2. Services
+
+**macOS (LaunchAgent):**
+- Stops and unloads `com.rampart.serve.plist`
+- Removes `~/Library/LaunchAgents/com.rampart.serve.plist`
+
+**Linux (systemd):**
+- Stops and disables `rampart-serve.service`
+- Removes `~/.config/systemd/user/rampart-serve.service`
+- Runs `systemctl --user daemon-reload`
+
+**Windows:**
+- Kills any running `rampart.exe serve` processes
+
+### 3. PATH entries (Windows only)
+
+Removes `~/.rampart/bin` from user PATH.
+
+**Note:** On Unix systems, you must manually remove PATH entries from your shell profile (`~/.bashrc`, `~/.zshrc`, etc.).
+
+### What is NOT removed
+
+- **`~/.rampart/` directory**: Contains policies, audit logs, and token
+- **`rampart` binary**: The executable itself
+
+You must manually delete these if desired (see instructions below).
+
+## Examples
+
+### Interactive uninstall
+
+```bash
+rampart uninstall
+```
+
+```
+🗑️  Rampart Uninstall
+
+This will remove Rampart from your system. Continue? [y/N] y
+
+Removing Claude Code hooks...
+Removing Cline hooks...
+Stopping rampart serve...
+
+✓ Removed:
+    • Claude Code hooks
+    • Cline hooks
+    • systemd service
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Almost done! To complete uninstallation, delete the Rampart directory:
+
+    rm -rf ~/.rampart
+
+If you added Rampart to your shell profile, remove that line from:
+    ~/.bashrc, ~/.zshrc, or ~/.profile
+
+The rampart binary at /usr/local/bin/rampart can also be deleted.
+```
+
+### Non-interactive uninstall
+
+```bash
+rampart uninstall --yes
+```
+
+Skips the confirmation prompt.
+
+### Complete removal
+
+```bash
+# Uninstall Rampart
+rampart uninstall --yes
+
+# Delete data directory
+rm -rf ~/.rampart
+
+# Delete binary
+rm /usr/local/bin/rampart
+
+# Remove from shell profile
+sed -i '/rampart/d' ~/.zshrc
+```
+
+## Platform-specific notes
+
+### macOS
+
+```bash
+rampart uninstall --yes
+
+# Remove data
+rm -rf ~/.rampart
+
+# Remove binary (Homebrew)
+brew uninstall rampart
+
+# Remove binary (manual install)
+rm /usr/local/bin/rampart
+
+# Remove from shell profile
+sed -i '' '/rampart/d' ~/.zshrc
+```
+
+### Linux
+
+```bash
+rampart uninstall --yes
+
+# Remove data
+rm -rf ~/.rampart
+
+# Remove binary
+sudo rm /usr/local/bin/rampart
+
+# Remove from shell profile
+sed -i '/rampart/d' ~/.bashrc
+```
+
+### Windows (PowerShell)
+
+```powershell
+rampart uninstall --yes
+
+# Remove data
+Remove-Item -Recurse ~/.rampart
+
+# Remove binary
+Remove-Item C:\Users\<username>\go\bin\rampart.exe
+
+# PATH is automatically removed by uninstall
+# Restart your terminal to update PATH
+```
+
+## Troubleshooting
+
+### Service won't stop
+
+```bash
+# Force kill on macOS/Linux
+pkill -f "rampart serve"
+
+# Force kill on Windows
+taskkill /F /IM rampart.exe
+```
+
+### Permission denied removing hooks
+
+```bash
+# Fix permissions (macOS/Linux)
+chmod -R u+w ~/.claude ~/Documents/Cline
+
+# Try again
+rampart uninstall --yes
+```
+
+### Hooks not detected
+
+If `rampart uninstall` doesn't detect hooks, remove them manually:
+
+**Claude Code:**
+```bash
+# Edit settings.json and remove rampart hooks
+code ~/.claude/settings.json
+```
+
+**Cline:**
+```bash
+rm -rf ~/Documents/Cline/Hooks
+```
+
+### Binary in use
+
+```
+Text file busy (cannot delete binary while running)
+```
+
+Exit all Rampart processes first:
+
+```bash
+pkill -f rampart
+rm /usr/local/bin/rampart
+```
+
+## What to keep
+
+If you plan to reinstall Rampart later:
+
+**Keep:**
+- `~/.rampart/policies/` — your custom policies
+- `~/.rampart/audit/` — audit history
+
+**Remove:**
+- `~/.rampart/token` — regenerate on reinstall
+
+```bash
+# Selective removal
+rampart uninstall --yes
+rm ~/.rampart/token
+# Keep policies and audit logs
+```
+
+## Reinstalling
+
+After uninstalling, reinstall with:
+
+```bash
+# Install binary (Homebrew)
+brew install rampart
+
+# Or download from releases
+curl -sSL https://rampart.sh/install | bash
+
+# Run setup
+rampart quickstart
+```
+
+## See also
+
+- [rampart setup](/cli/setup) - Install agent hooks
+- [rampart doctor](/cli/doctor) - Verify clean removal
+- [rampart quickstart](/cli/quickstart) - Reinstall and setup

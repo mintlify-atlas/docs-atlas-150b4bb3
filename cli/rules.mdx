@@ -1,0 +1,373 @@
+---
+title: rampart rules
+description: List and manage custom policy rules
+---
+
+View and manage rules added via `rampart allow` and `rampart block`.
+
+## Usage
+
+```bash
+rampart rules [flags]              # List custom rules
+rampart rules list [flags]         # List custom rules (alias)
+rampart rules remove <index>       # Remove a specific rule
+rampart rules reset                # Remove all custom rules
+```
+
+## Subcommands
+
+### list
+
+```bash
+rampart rules list [flags]
+```
+
+List all custom rules (alias for `rampart rules`).
+
+<ParamField path="--global" type="boolean" default="false">
+  Show only global rules
+</ParamField>
+
+<ParamField path="--project" type="boolean" default="false">
+  Show only project rules
+</ParamField>
+
+<ParamField path="--json" type="boolean" default="false">
+  Output as JSON for scripting
+</ParamField>
+
+### remove
+
+```bash
+rampart rules remove <index> [flags]
+```
+
+Remove a custom rule by index.
+
+<ParamField path="--force" type="boolean" default="false">
+  Skip confirmation prompt
+</ParamField>
+
+<ParamField path="--api" type="string" default="http://127.0.0.1:9090">
+  Rampart serve API address for reload
+</ParamField>
+
+<ParamField path="--token" type="string">
+  API auth token (or set `RAMPART_TOKEN`)
+</ParamField>
+
+### reset
+
+```bash
+rampart rules reset [flags]
+```
+
+Remove all custom rules.
+
+<ParamField path="--force" type="boolean" default="false">
+  Skip confirmation prompt
+</ParamField>
+
+<ParamField path="--api" type="string" default="http://127.0.0.1:9090">
+  Rampart serve API address for reload
+</ParamField>
+
+<ParamField path="--token" type="string">
+  API auth token (or set `RAMPART_TOKEN`)
+</ParamField>
+
+## Output format
+
+### Table view (default)
+
+```
+  Custom Rules
+  ──────────────────────────────────────────────────────────────
+
+  Global
+  ~/.rampart/policies/custom.yaml
+
+  #     ACTION   TOOL      PATTERN                               ADDED
+     1  allow    exec      npm install *                         2 hours ago
+        → User-allowed: npm install *
+     2  deny     exec      curl * | bash                         1 day ago
+        → User-blocked: curl * | bash
+     3  allow    read      /tmp/**                               3 days ago
+
+  Project
+  .rampart/policy.yaml
+
+  #     ACTION   TOOL      PATTERN                               ADDED
+     4  deny     write     /etc/**                               1 week ago
+        → Production config is read-only
+
+  ──────────────────────────────────────────────────────────────
+  Total: 15 rules (11 standard + 4 custom)
+  Manage: rampart rules remove <#>
+```
+
+### JSON output
+
+```bash
+rampart rules --json
+```
+
+```json
+[
+  {
+    "index": 1,
+    "source": "global",
+    "action": "allow",
+    "tool": "exec",
+    "pattern": "npm install *",
+    "message": "User-allowed: npm install *",
+    "added_at": "2026-03-03T13:00:00Z"
+  },
+  {
+    "index": 2,
+    "source": "global",
+    "action": "deny",
+    "tool": "exec",
+    "pattern": "curl * | bash",
+    "message": "User-blocked: curl * | bash",
+    "added_at": "2026-03-02T10:00:00Z"
+  }
+]
+```
+
+## Examples
+
+### List all rules
+
+```bash
+rampart rules
+```
+
+### List only global rules
+
+```bash
+rampart rules --global
+```
+
+### List only project rules
+
+```bash
+rampart rules --project
+```
+
+### Remove a rule
+
+```bash
+rampart rules remove 2
+```
+
+```
+  Remove this rule?
+
+    Action:  deny
+    Tool:    exec
+    Pattern: curl * | bash
+    Added:   1 day ago
+    Source:  global
+
+  [y/N] y
+
+  ✓ Rule removed
+  ✓ Policy reloaded (14 rules active)
+```
+
+### Remove without confirmation
+
+```bash
+rampart rules remove 2 --force
+```
+
+### Reset all custom rules
+
+```bash
+rampart rules reset
+```
+
+```
+  This will remove all custom rules:
+
+    Global:  3 rule(s)
+    Project: 1 rule(s)
+
+  Standard policy (11 rules) will not be affected.
+
+  Reset? [y/N] y
+
+  ✓ Removed 4 custom rule(s)
+  ✓ Policy reloaded (11 rules active)
+```
+
+### Export to JSON
+
+```bash
+rampart rules --json > rules.json
+```
+
+## Rule indices
+
+Rule indices are **global** and **sequential** across all sources:
+
+```
+Global rules:  1, 2, 3
+Project rules: 4, 5
+```
+
+Indices remain stable until you remove a rule, then they are recalculated.
+
+## Policy reload
+
+If `rampart serve` is running, the policy is automatically reloaded after removing or resetting rules:
+
+```
+✓ Policy reloaded (14 rules active)
+```
+
+If serve is not running:
+
+```
+Saved (14 rules). Run 'rampart serve' to activate.
+```
+
+## Use cases
+
+### Audit custom rules
+
+```bash
+rampart rules
+```
+
+Review all custom allow/deny rules.
+
+### Clean up old rules
+
+```bash
+rampart rules remove 5
+rampart rules remove 3
+```
+
+Remove unused rules by index.
+
+### Reset to standard policy
+
+```bash
+rampart rules reset --force
+```
+
+Remove all custom rules, keeping only the standard policy.
+
+### Export for backup
+
+```bash
+rampart rules --json > backup.json
+```
+
+### CI validation
+
+```bash
+#!/bin/bash
+# Ensure no custom rules in CI
+count=$(rampart rules --json | jq length)
+if [ $count -gt 0 ]; then
+  echo "Custom rules detected in CI environment"
+  rampart rules
+  exit 1
+fi
+```
+
+### Filter with jq
+
+```bash
+# List only deny rules
+rampart rules --json | jq '.[] | select(.action == "deny")'
+
+# Count rules by action
+rampart rules --json | jq 'group_by(.action) | map({action: .[0].action, count: length})'
+```
+
+## Standard vs custom rules
+
+### Standard rules
+
+Defined in policy profiles (`standard.yaml`, `paranoid.yaml`, etc.):
+- Managed by `rampart init`
+- Updated on `rampart upgrade`
+- Not shown by `rampart rules`
+
+### Custom rules
+
+Defined by you via `rampart allow` and `rampart block`:
+- Stored in `custom.yaml` (global) or `.rampart/policy.yaml` (project)
+- Shown by `rampart rules`
+- Never touched by `rampart upgrade`
+
+## Troubleshooting
+
+### No custom rules found
+
+```
+  No custom rules found.
+
+  Add rules with:
+    rampart allow "command pattern"
+    rampart block "command pattern"
+```
+
+You haven't added any custom rules yet.
+
+### Invalid index
+
+```
+rules: index 10 not found (have 4 rule(s))
+```
+
+The index doesn't exist. Run `rampart rules` to see valid indices.
+
+### Negative index
+
+```
+rules: invalid index "-1" — must be a positive integer (indices start at 1)
+```
+
+Indices start at 1, not 0.
+
+### Policy file missing
+
+```
+rules: load global custom rules: open ~/.rampart/policies/custom.yaml: no such file or directory
+```
+
+Create the custom policy file:
+
+```bash
+rampart init
+rampart allow "npm test"
+```
+
+## File locations
+
+### Global custom policy
+
+```
+~/.rampart/policies/custom.yaml
+```
+
+Stores global custom rules (applies to all projects).
+
+### Project custom policy
+
+```
+.rampart/policy.yaml
+```
+
+Stores project-specific custom rules (applies to current project only).
+
+## See also
+
+- [rampart allow](/cli/allow) - Add allow rules
+- [rampart block](/cli/block) - Add deny rules
+- [rampart policy](/cli/policy) - Policy management

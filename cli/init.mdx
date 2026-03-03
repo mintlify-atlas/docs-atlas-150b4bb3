@@ -1,0 +1,260 @@
+---
+title: rampart init
+description: Initialize Rampart configuration and default policies
+---
+
+Initialize Rampart by creating configuration files and installing default policy profiles.
+
+## Usage
+
+```bash
+rampart init [flags]
+```
+
+## Flags
+
+<ParamField path="--profile" type="string" default="standard">
+  Policy profile to install: `standard`, `paranoid`, `yolo`, `block-prompt-injection`, `research-agent`, or `mcp-server`
+</ParamField>
+
+<ParamField path="--project" type="boolean" default="false">
+  Create `.rampart/policy.yaml` in the current directory for team-shared project rules
+</ParamField>
+
+<ParamField path="--force" type="boolean" default="false">
+  Overwrite existing config and profile files
+</ParamField>
+
+<ParamField path="--defaults" type="boolean" default="false">
+  Use default settings and overwrite existing files (alias for `--force`)
+</ParamField>
+
+<ParamField path="--detect" type="boolean" default="false">
+  Auto-detect installed tools and generate a tailored policy
+</ParamField>
+
+## What it does
+
+### Global initialization
+
+By default, `rampart init` creates:
+
+1. **Config directory**: `~/.rampart/`
+2. **Policy directory**: `~/.rampart/policies/`
+3. **Audit directory**: `~/.rampart/audit/`
+4. **Profile file**: `~/.rampart/policies/<profile>.yaml`
+
+### Project initialization
+
+With `--project`, creates:
+
+1. **Project directory**: `.rampart/`
+2. **Project policy**: `.rampart/policy.yaml`
+
+Project policies are team-shared rules committed to your repository. They are applied on top of your global policy.
+
+## Policy profiles
+
+### standard
+
+Balanced protection for general development work:
+- Blocks credential theft
+- Blocks destructive commands
+- Requires approval for network egress
+- Allows most development tools
+
+### paranoid
+
+Maximum security — blocks nearly everything:
+- Requires approval for all file writes
+- Requires approval for all command execution
+- Blocks all network operations
+- Best for high-risk environments
+
+### yolo
+
+Monitor-only mode — allows everything:
+- All actions allowed by default
+- Audit logging only
+- Useful for testing and experimentation
+
+### block-prompt-injection
+
+Focused on prompt injection attacks:
+- Blocks indirect prompt injection patterns
+- Blocks jailbreak attempts
+- Allows normal operations
+
+### research-agent
+
+Optimized for autonomous research agents:
+- Allows web browsing and API calls
+- Blocks file system modifications
+- Requires approval for command execution
+
+### mcp-server
+
+Lockdown for MCP server environments:
+- Minimal permissions
+- Blocks most operations by default
+- Requires explicit allow rules
+
+## Examples
+
+### Basic initialization
+
+```bash
+rampart init
+```
+
+Creates `~/.rampart/policies/standard.yaml`
+
+### Paranoid mode
+
+```bash
+rampart init --profile paranoid
+```
+
+Installs the paranoid policy profile
+
+### Project policy
+
+```bash
+rampart init --project
+```
+
+Creates `.rampart/policy.yaml` in the current directory:
+
+```yaml
+# .rampart/policy.yaml
+version: "1"
+
+policies:
+  # Example: block destructive commands in this repo
+  # - name: myproject-no-destructive
+  #   match:
+  #     tool: exec
+  #   rules:
+  #     - action: deny
+  #       when:
+  #         command_matches:
+  #           - "rm -rf *"
+  #       message: "Destructive commands blocked by project policy"
+```
+
+**Commit this file** to enforce rules for all team members.
+
+### Auto-detect environment
+
+```bash
+rampart init --detect
+```
+
+Detects installed tools and generates a tailored policy:
+
+```
+🔍 Detecting environment...
+  ✓ Claude Code found (~/.claude/settings.json)
+  ✓ kubectl found — Kubernetes rules enabled
+  ✓ Docker found — container rules enabled
+  ✓ AWS credentials found — credential protection enabled
+
+Generating tailored policy → rampart.yaml
+```
+
+### Force reset
+
+```bash
+rampart init --force
+```
+
+Overwrites existing config and policy files. Your `custom.yaml` and token are preserved.
+
+### Multiple profiles
+
+```bash
+rampart init --profile standard
+rampart init --profile paranoid
+rampart init --profile yolo
+```
+
+Install multiple profiles. Switch between them by changing the config.
+
+## Project policies
+
+Project policies are applied **on top of** your global policy:
+
+- Global `default_action` always takes precedence
+- Project rules can only **add restrictions**
+- Set `RAMPART_NO_PROJECT_POLICY=1` to skip loading project policy
+
+**Example project policy:**
+
+```yaml
+version: "1"
+
+policies:
+  - name: myproject-no-destructive
+    match:
+      tool: exec
+    rules:
+      - action: deny
+        when:
+          command_matches:
+            - "DROP TABLE *"
+            - "rm -rf *"
+        message: "Destructive commands blocked by project policy"
+
+  - name: myproject-secrets-readonly
+    match:
+      tool: write
+    rules:
+      - action: deny
+        when:
+          path_matches:
+            - "*.env.production"
+            - "*/secrets/**"
+        message: "Production secrets are read-only for AI agents"
+```
+
+## Troubleshooting
+
+### Config already exists
+
+```
+Config and policies already exist.
+--force overwrites ~/.rampart/policies/standard.yaml.
+```
+
+Use `--force` to reset:
+
+```bash
+rampart init --force
+```
+
+### Project policy already exists
+
+```
+cli: .rampart/policy.yaml already exists — delete it first if you want to regenerate
+```
+
+Delete the file manually:
+
+```bash
+rm .rampart/policy.yaml
+rampart init --project
+```
+
+### Invalid profile
+
+```
+cli: invalid profile "custom" (valid: standard, paranoid, yolo, block-prompt-injection, research-agent, mcp-server)
+```
+
+Use one of the built-in profiles.
+
+## See also
+
+- [rampart policy](/cli/policy) - Manage policies
+- [rampart setup](/cli/setup) - Install agent hooks
+- [rampart quickstart](/cli/quickstart) - One-shot setup

@@ -1,0 +1,295 @@
+---
+title: rampart token
+description: Show and rotate bearer tokens
+---
+
+Manage the bearer token used to authenticate with `rampart serve`.
+
+## Usage
+
+```bash
+rampart token              # Show current token
+rampart token show         # Show current token (alias)
+rampart token rotate       # Generate and save a new token
+```
+
+## Subcommands
+
+### show
+
+```bash
+rampart token show
+```
+
+Print the current bearer token.
+
+### rotate
+
+```bash
+rampart token rotate [flags]
+```
+
+Generate and persist a new bearer token.
+
+<ParamField path="--force" type="boolean" default="false">
+  Skip confirmation prompt
+</ParamField>
+
+## Token storage
+
+Tokens are stored in:
+
+```
+~/.rampart/token
+```
+
+Permissions: `0600` (owner read/write only)
+
+## How tokens work
+
+### Generation
+
+Tokens are 64-character hex strings generated from 32 bytes of cryptographically secure random data:
+
+```
+Example: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+```
+
+### Authentication
+
+The token is used in the `Authorization` header for all API requests to `rampart serve`:
+
+```
+Authorization: Bearer <token>
+```
+
+### When to rotate
+
+- Token leaked or exposed
+- Regular security rotation (recommended: quarterly)
+- Suspicious activity detected
+- After firing a team member with access
+
+## Examples
+
+### Show current token
+
+```bash
+rampart token
+```
+
+```
+a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+```
+
+### Rotate token (interactive)
+
+```bash
+rampart token rotate
+```
+
+```
+Rotate token and overwrite ~/.rampart/token? [y/N]: y
+b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3
+```
+
+### Rotate token (non-interactive)
+
+```bash
+rampart token rotate --force
+```
+
+```
+c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4
+```
+
+Useful for automation.
+
+### Save to environment variable
+
+```bash
+export RAMPART_TOKEN=$(rampart token)
+```
+
+Store token in an environment variable for CLI use.
+
+### Copy to clipboard (macOS)
+
+```bash
+rampart token | pbcopy
+```
+
+### Copy to clipboard (Linux)
+
+```bash
+rampart token | xclip -selection clipboard
+```
+
+## Token priority
+
+Rampart checks for tokens in this order:
+
+1. **`RAMPART_TOKEN` environment variable**
+2. **`~/.rampart/token` file**
+
+If neither exists, API authentication fails.
+
+## Use cases
+
+### CI/CD integration
+
+```bash
+# Generate token on deployment server
+rampart token rotate --force
+
+# Save to CI environment
+export RAMPART_TOKEN=$(rampart token)
+
+# Use in scripts
+curl -H "Authorization: Bearer $RAMPART_TOKEN" \
+  http://localhost:9090/v1/policy/reload
+```
+
+### Manual API testing
+
+```bash
+TOKEN=$(rampart token)
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:9090/v1/approvals
+```
+
+### Rotate after leak
+
+```bash
+# Immediately rotate if token is exposed
+rampart token rotate --force
+
+# Restart serve to use new token
+rampart serve install
+```
+
+### Team token management
+
+```bash
+# Generate shared token for team
+rampart token rotate --force > team-token.txt
+
+# Distribute to team (securely)
+# Each member sets:
+export RAMPART_TOKEN=$(cat team-token.txt)
+```
+
+**Note:** Shared tokens are discouraged. Use individual tokens when possible.
+
+## Security best practices
+
+### DO
+
+- Rotate tokens regularly (quarterly minimum)
+- Use `0600` permissions on `~/.rampart/token`
+- Store tokens in environment variables (not shell history)
+- Revoke tokens when access is no longer needed
+
+### DON'T
+
+- Commit tokens to version control
+- Share tokens over unencrypted channels
+- Log tokens in application logs
+- Reuse tokens across environments
+
+## Troubleshooting
+
+### No token found
+
+```
+no token found - run 'rampart serve' to generate one
+```
+
+Generate a token:
+
+```bash
+rampart serve install
+```
+
+This creates `~/.rampart/token` and starts the service.
+
+### Token authentication failed
+
+```
+HTTP 401 Unauthorized
+```
+
+Token may be invalid or expired. Rotate:
+
+```bash
+rampart token rotate --force
+rampart serve install  # Restart serve with new token
+```
+
+### Permission denied
+
+```
+permission denied reading ~/.rampart/token
+```
+
+Fix permissions:
+
+```bash
+chmod 600 ~/.rampart/token
+```
+
+### Token not in environment
+
+```bash
+echo $RAMPART_TOKEN
+# (empty)
+```
+
+Set the environment variable:
+
+```bash
+export RAMPART_TOKEN=$(rampart token)
+```
+
+Add to shell profile for persistence:
+
+```bash
+echo 'export RAMPART_TOKEN=$(cat ~/.rampart/token)' >> ~/.zshrc
+```
+
+## API usage
+
+### Policy reload
+
+```bash
+TOKEN=$(rampart token)
+curl -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  http://localhost:9090/v1/policy/reload
+```
+
+### List approvals
+
+```bash
+TOKEN=$(rampart token)
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:9090/v1/approvals
+```
+
+### Approve a request
+
+```bash
+TOKEN=$(rampart token)
+curl -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"abc123"}' \
+  http://localhost:9090/v1/approve
+```
+
+## See also
+
+- [rampart serve](/cli/serve) - Start approval + dashboard server
+- [rampart approve](/cli/approve-deny) - Approve pending requests
+- [rampart doctor](/cli/doctor) - Verify token is set up correctly
