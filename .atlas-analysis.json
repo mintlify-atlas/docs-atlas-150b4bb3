@@ -1,0 +1,176 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "Rampart",
+  "projectDescription": "Open-source firewall and policy engine that controls what AI agents can do on your machine",
+  "theme": "aspen",
+  "primaryColor": "#FF6392",
+  "lightColor": "#FFB3CC",
+  "darkColor": "#CC2E5D",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/how-it-works",
+              "concepts/threat-model"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/claude-code",
+              "integrations/cline",
+              "integrations/openclaw",
+              "integrations/codex",
+              "integrations/mcp-servers",
+              "integrations/wrap-any-agent",
+              "integrations/preload"
+            ]
+          },
+          {
+            "group": "Policies",
+            "pages": [
+              "policies/writing-policies",
+              "policies/profiles",
+              "policies/project-policies",
+              "policies/testing-policies",
+              "policies/community-policies"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "features/approval-flow",
+              "features/audit-trail",
+              "features/live-dashboard",
+              "features/webhook-notifications",
+              "features/siem-integration"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/ci-headless",
+              "guides/native-ask",
+              "guides/securing-claude-desktop",
+              "guides/wazuh-integration",
+              "guides/codex-integration",
+              "guides/compliance",
+              "guides/benchmarking",
+              "guides/windows"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/recommendations",
+              "security/owasp-coverage",
+              "security/self-modification-protection"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "CLI Commands",
+            "pages": [
+              "cli/overview",
+              "cli/setup",
+              "cli/quickstart",
+              "cli/serve",
+              "cli/policy",
+              "cli/test",
+              "cli/watch",
+              "cli/audit",
+              "cli/approve-deny",
+              "cli/wrap",
+              "cli/preload",
+              "cli/mcp",
+              "cli/hook",
+              "cli/doctor",
+              "cli/upgrade"
+            ]
+          },
+          {
+            "group": "HTTP API",
+            "pages": [
+              "api/overview",
+              "api/authentication",
+              "api/tool-evaluation",
+              "api/preflight",
+              "api/approvals",
+              "api/events",
+              "api/status"
+            ]
+          },
+          {
+            "group": "Policy Schema",
+            "pages": [
+              "schema/policy-structure",
+              "schema/match-conditions",
+              "schema/actions",
+              "schema/webhooks"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Policy engine with YAML-based rules and hot-reload",
+    "Hash-chained audit trail with tamper detection",
+    "Human-in-the-loop approval workflows",
+    "Native integrations with Claude Code, Cline, OpenClaw, and Codex",
+    "MCP server proxying and policy generation",
+    "LD_PRELOAD syscall interception for universal coverage",
+    "Live TUI and web dashboard for monitoring",
+    "SIEM integration via syslog and CEF formats",
+    "Project-local policies for team-shared rules",
+    "Community policy registry and sync"
+  ],
+  "publicApiSurface": [
+    "rampart quickstart",
+    "rampart setup [claude-code|cline|openclaw|codex]",
+    "rampart serve [install|stop]",
+    "rampart policy [init|lint|explain|test|sync|fetch]",
+    "rampart test <command>",
+    "rampart watch",
+    "rampart audit [tail|verify|stats|search]",
+    "rampart approve <id>",
+    "rampart deny <id>",
+    "rampart pending",
+    "rampart wrap -- <command>",
+    "rampart preload -- <command>",
+    "rampart mcp [scan] -- <server>",
+    "rampart hook",
+    "rampart doctor",
+    "rampart status",
+    "rampart allow <pattern>",
+    "rampart block <pattern>",
+    "rampart rules [remove|reset]",
+    "rampart upgrade",
+    "rampart bench",
+    "rampart report compliance",
+    "POST /v1/tool/{toolName}",
+    "POST /v1/preflight/{toolName}",
+    "GET /v1/approvals",
+    "POST /v1/approvals/{id}/resolve",
+    "GET /v1/events/stream",
+    "GET /v1/status",
+    "GET /healthz"
+  ]
+}
