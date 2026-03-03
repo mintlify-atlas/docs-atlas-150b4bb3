@@ -1,0 +1,349 @@
+---
+title: 'Tool Evaluation'
+description: 'POST /v1/tool/{toolName} — Evaluate and execute tool calls'
+---
+
+## Endpoint
+
+```http
+POST /v1/tool/{toolName}
+```
+
+Evaluates a tool call against active policy. In `enforce` mode, deny decisions are blocked; approval-required decisions are queued.
+
+## Path Parameters
+
+<ParamField path="toolName" type="string" required>
+  The name of the tool being invoked (e.g., `exec`, `read`, `write`, `fetch`)
+</ParamField>
+
+## Request Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for authentication
+  
+  ```
+  Authorization: Bearer <token>
+  ```
+</ParamField>
+
+<ParamField header="Content-Type" type="string" required>
+  Must be `application/json`
+</ParamField>
+
+## Request Body
+
+<ParamField body="agent" type="string" required>
+  Agent identifier (e.g., `claude-code`, `aider`, `custom-agent`)
+</ParamField>
+
+<ParamField body="session" type="string" required>
+  Session identifier, typically `repo/branch` format (e.g., `myapp/main`)
+</ParamField>
+
+<ParamField body="params" type="object" required>
+  Tool-specific parameters. For `exec` tools, includes `command`. For file tools, includes `path`.
+  
+  Additional properties are allowed and vary by tool type.
+</ParamField>
+
+<ParamField body="run_id" type="string">
+  Optional run identifier for grouping related tool calls
+</ParamField>
+
+<ParamField body="input" type="object">
+  Optional tool input for MCP-style requests
+</ParamField>
+
+<ParamField body="response" type="string">
+  Optional tool output for response-side policy evaluation. When provided, the server scans the output for sensitive content before returning.
+</ParamField>
+
+## Response Fields
+
+<ResponseField name="decision" type="string" required>
+  Policy decision: `allow`, `deny`, `watch`, `ask`, or `require_approval`
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable decision message
+</ResponseField>
+
+<ResponseField name="eval_duration_us" type="integer" required>
+  Policy evaluation time in microseconds
+</ResponseField>
+
+<ResponseField name="policy" type="string">
+  Name of the matched policy (if any)
+</ResponseField>
+
+<ResponseField name="suggestions" type="array">
+  Array of suggested commands to allow the operation (appears on `deny`)
+  
+  Example: `["rampart allow exec 'npm install' --reason 'dev dependency'"]`
+</ResponseField>
+
+<ResponseField name="approval_id" type="string">
+  Approval request ID (only present when `decision` is `ask` or `require_approval`)
+</ResponseField>
+
+<ResponseField name="approval_status" type="string">
+  Approval status: `pending` (only present on approval-required responses)
+</ResponseField>
+
+<ResponseField name="expires_at" type="string">
+  ISO 8601 timestamp when approval expires (only present on approval-required responses)
+</ResponseField>
+
+<ResponseField name="response" type="string">
+  Tool output (when `response` was provided in request). May be `[REDACTED: sensitive content removed by Rampart]` if blocked.
+</ResponseField>
+
+## Status Codes
+
+| Status | Meaning |
+|--------|----------|
+| `200 OK` | Evaluated successfully — tool call allowed, watched, or denied in monitor mode |
+| `202 Accepted` | Approval required; request queued |
+| `400 Bad Request` | Invalid JSON body |
+| `401 Unauthorized` | Missing or invalid bearer token |
+| `403 Forbidden` | Denied in enforce mode |
+| `503 Service Unavailable` | Approval queue full |
+
+## Examples
+
+### Allowed Request
+
+```bash
+TOKEN="$(cat ~/.rampart/token)"
+curl -X POST "http://127.0.0.1:9090/v1/tool/exec" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "claude-code",
+    "session": "repo/main",
+    "params": {
+      "command": "git status"
+    }
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "decision": "allow",
+  "message": "git allowed",
+  "eval_duration_us": 9,
+  "policy": "allow-git"
+}
+```
+
+### Denied Request
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/tool/exec" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "claude-code",
+    "session": "repo/main",
+    "params": {
+      "command": "rm -rf /"
+    }
+  }'
+```
+
+**Response (403 Forbidden):**
+```json
+{
+  "decision": "deny",
+  "message": "destructive command blocked",
+  "eval_duration_us": 12,
+  "policy": "block-destructive",
+  "suggestions": [
+    "rampart allow exec 'rm -rf /' --reason 'justified reason'"
+  ]
+}
+```
+
+### Approval Required
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/tool/exec" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "claude-code",
+    "session": "myapp/production",
+    "run_id": "run_01J...",
+    "params": {
+      "command": "kubectl apply -f production.yaml"
+    }
+  }'
+```
+
+**Response (202 Accepted):**
+```json
+{
+  "decision": "ask",
+  "message": "needs approval",
+  "eval_duration_us": 15,
+  "policy": "require-human",
+  "approval_id": "01J...",
+  "approval_status": "pending",
+  "expires_at": "2026-03-03T12:34:56Z"
+}
+```
+
+### File Read
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/tool/read" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "cline",
+    "session": "project/feature",
+    "params": {
+      "path": "/home/user/.ssh/id_rsa"
+    }
+  }'
+```
+
+**Response (403 Forbidden):**
+```json
+{
+  "decision": "deny",
+  "message": "credential access blocked",
+  "eval_duration_us": 3,
+  "policy": "block-credential-reads"
+}
+```
+
+### With Run ID (Grouped Operations)
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/tool/exec" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "claude-code",
+    "session": "webapp/deploy",
+    "run_id": "run_01J9K8L7M6N5",
+    "params": {
+      "command": "terraform apply"
+    }
+  }'
+```
+
+<Info>
+Including a `run_id` allows grouping related tool calls. When you bulk-approve a run, all pending approvals with the same `run_id` are resolved together.
+</Info>
+
+### Response-Side Evaluation
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/tool/exec" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "agent-executor",
+    "session": "test/dev",
+    "params": {
+      "command": "cat config.json"
+    },
+    "response": "{\"api_key\": \"sk-abc123...\"}"
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "decision": "deny",
+  "message": "API key detected in response",
+  "eval_duration_us": 8,
+  "policy": "block-credential-leak",
+  "response": "[REDACTED: sensitive content removed by Rampart]"
+}
+```
+
+<Note>
+Response-side evaluation scans tool output for credentials and sensitive patterns. If detected, the response is redacted and the decision is changed to `deny`.
+</Note>
+
+## Common Use Cases
+
+### Integration with Custom Agents
+
+```python
+import requests
+
+def execute_with_rampart(tool, command, agent="my-agent", session="default"):
+    with open(os.path.expanduser("~/.rampart/token")) as f:
+        token = f.read().strip()
+    
+    response = requests.post(
+        f"http://localhost:9090/v1/tool/{tool}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "agent": agent,
+            "session": session,
+            "params": {"command": command}
+        }
+    )
+    
+    result = response.json()
+    
+    if result["decision"] == "deny":
+        raise PermissionError(f"Blocked: {result['message']}")
+    
+    if result["decision"] in ["ask", "require_approval"]:
+        print(f"Waiting for approval: {result['approval_id']}")
+        # Wait for approval...
+    
+    return result
+```
+
+### Auto-Approved Runs
+
+When a `run_id` has been bulk-approved, subsequent tool calls with the same `run_id` are automatically allowed:
+
+```bash
+# First, bulk-approve a run
+curl -X POST "http://127.0.0.1:9090/v1/approvals/bulk-resolve" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"run_id":"run_01J...","action":"approve"}'
+
+# Now this tool call is auto-approved
+curl -X POST "http://127.0.0.1:9090/v1/tool/exec" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "claude-code",
+    "session": "app/main",
+    "run_id": "run_01J...",
+    "params": {"command": "npm install"}
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "decision": "allow",
+  "message": "auto-approved by bulk-resolve",
+  "eval_duration_us": 5,
+  "policy": "auto-approved"
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Preflight" icon="plane-departure" href="/api/preflight">
+    Dry-run policy checks before execution
+  </Card>
+  <Card title="Approvals" icon="check-circle" href="/api/approvals">
+    Manage approval workflows
+  </Card>
+</CardGroup>

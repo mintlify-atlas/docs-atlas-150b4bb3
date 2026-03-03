@@ -1,0 +1,406 @@
+---
+title: Audit Trail
+description: Hash-chained JSONL audit logging for tamper-evident compliance
+---
+
+# Audit Trail
+
+Every tool call is logged to a hash-chained JSONL file. Each entry includes a SHA-256 hash of the previous entry — tamper with any record and the chain breaks.
+
+## Why Hash-Chained?
+
+In regulated environments, you need to prove what your agent did. A hash chain means no one can edit history without detection:
+
+- **Tamper-evident**: Modifying a single log entry breaks the chain
+- **Verifiable**: `rampart audit verify` checks the entire chain in seconds
+- **Append-only**: New events reference the hash of the previous event
+- **No external dependencies**: Works offline, no blockchain or external services
+
+## Audit Log Location
+
+By default, audit logs are stored at:
+
+```
+~/.rampart/audit/audit.jsonl
+```
+
+Configure with `--audit-dir`:
+
+```bash
+rampart serve --audit-dir /var/lib/rampart/audit
+```
+
+## Event Format
+
+Each audit event is a single-line JSON object:
+
+```json
+{
+  "timestamp": "2026-03-03T14:23:05Z",
+  "id": "evt_9k2j3h1",
+  "tool": "exec",
+  "agent": "claude-code",
+  "session": "myapp/main",
+  "request": {
+    "command": "rm -rf /tmp/*"
+  },
+  "decision": {
+    "action": "deny",
+    "matched_policies": ["block-destructive"],
+    "message": "Destructive command blocked",
+    "eval_duration_us": 8
+  },
+  "prev_hash": "sha256:a3f5d9c...",
+  "this_hash": "sha256:7b2e4f1..."
+}
+```
+
+### Key Fields
+
+| Field | Description |
+|-------|-------------|
+| `timestamp` | ISO 8601 timestamp (UTC) |
+| `id` | Unique event identifier |
+| `tool` | Tool name (`exec`, `read`, `write`, `fetch`, `mcp`) |
+| `agent` | Agent identifier (e.g., `claude-code`, `aider`) |
+| `session` | Session label (auto-detected from git: `repo/branch`) |
+| `request` | Tool-specific parameters (command, path, URL, etc.) |
+| `decision.action` | Policy decision (`allow`, `deny`, `ask`, `watch`) |
+| `decision.matched_policies` | List of policy names that matched |
+| `decision.message` | Human-readable explanation |
+| `decision.eval_duration_us` | Policy evaluation time in microseconds |
+| `prev_hash` | SHA-256 hash of the previous event |
+| `this_hash` | SHA-256 hash of this event (excluding `this_hash` field) |
+
+## Viewing Audit Logs
+
+### Tail Recent Events
+
+```bash
+rampart audit tail
+```
+
+Output:
+
+```
+2026-03-03 14:23:05  allow  exec   git status                      [allow-git]
+2026-03-03 14:23:07  allow  read   ~/project/src/main.go           [default]
+2026-03-03 14:23:09  deny   exec   rm -rf /tmp/*                   [block-destructive]
+2026-03-03 14:23:11  watch  exec   curl https://api.example.com    [log-network]
+2026-03-03 14:23:13  ask    exec   kubectl apply -f prod.yaml      [require-approval]
+```
+
+### Follow Live Events
+
+```bash
+rampart audit tail --follow
+```
+
+Streams new events as they happen (like `tail -f`).
+
+### Pretty-Print Logs
+
+```bash
+rampart log
+```
+
+Colorized, human-readable output:
+
+```
+✅ 14:23:05  exec  "git status"                          [allow-git]
+✅ 14:23:07  read  ~/project/src/main.go                  [default]
+🔴 14:23:09  exec  "rm -rf /tmp/*"                        [block-destructive]
+🟡 14:23:11  exec  "curl https://api.example.com"         [log-network]
+👤 14:23:13  exec  "kubectl apply -f prod.yaml"           [require-approval]
+```
+
+### Filter by Decision
+
+```bash
+# Show only denies
+rampart log --deny
+
+# Show only approvals
+rampart log --ask
+
+# Show only watch events
+rampart log --watch
+```
+
+### Limit Output
+
+```bash
+# Last 50 events
+rampart log -n 50
+
+# Today's events
+rampart log --today
+```
+
+## Searching Audit Logs
+
+<Steps>
+
+### Search by Tool
+
+```bash
+rampart audit search --tool exec
+```
+
+Shows all `exec` tool calls.
+
+### Search by Decision
+
+```bash
+rampart audit search --decision deny
+```
+
+Shows all denied commands.
+
+### Search by Time Range
+
+```bash
+rampart audit search --since "2026-03-01" --until "2026-03-03"
+```
+
+### Combine Filters
+
+```bash
+rampart audit search --tool exec --decision deny --since "2026-03-01"
+```
+
+Shows all denied `exec` calls since March 1st.
+
+</Steps>
+
+## Verifying Chain Integrity
+
+Check that the audit log hasn't been tampered with:
+
+```bash
+rampart audit verify
+```
+
+Output:
+
+```
+✓ Chain verified: 1,247 events
+✓ No hash mismatches
+✓ No gaps detected
+✓ Anchor hash: sha256:7b2e4f1...
+```
+
+If the chain is broken:
+
+```
+✗ Chain verification failed
+✗ Hash mismatch at event 834
+  Expected: sha256:a3f5d9c...
+  Got:      sha256:invalid...
+```
+
+This indicates tampering or corruption.
+
+## Audit Statistics
+
+Get a breakdown of decisions:
+
+```bash
+rampart audit stats
+```
+
+Output:
+
+```
+Total events: 1,247
+
+By decision:
+  allow: 1,201 (96.3%)
+  deny:    12 (1.0%)
+  watch:   34 (2.7%)
+  ask:      0 (0.0%)
+
+By tool:
+  exec:  892 (71.5%)
+  read:  245 (19.6%)
+  write:  87 (7.0%)
+  fetch:  23 (1.9%)
+
+Top policies:
+  allow-git:          345
+  block-destructive:    8
+  block-credential-access: 4
+```
+
+## Example Audit Events
+
+### Allowed Command
+
+```json
+{
+  "timestamp": "2026-03-03T14:23:01Z",
+  "id": "evt_abc123",
+  "tool": "exec",
+  "agent": "claude-code",
+  "session": "myapp/main",
+  "request": {
+    "command": "npm test"
+  },
+  "decision": {
+    "action": "allow",
+    "matched_policies": ["allow-dev"],
+    "message": "Development command allowed",
+    "eval_duration_us": 4
+  },
+  "prev_hash": "sha256:...",
+  "this_hash": "sha256:..."
+}
+```
+
+### Denied Command
+
+```json
+{
+  "timestamp": "2026-03-03T14:23:05Z",
+  "id": "evt_def456",
+  "tool": "exec",
+  "agent": "claude-code",
+  "session": "myapp/main",
+  "request": {
+    "command": "rm -rf /tmp/*"
+  },
+  "decision": {
+    "action": "deny",
+    "matched_policies": ["block-destructive"],
+    "message": "Destructive command blocked",
+    "eval_duration_us": 8
+  },
+  "prev_hash": "sha256:...",
+  "this_hash": "sha256:..."
+}
+```
+
+### Approval Request
+
+```json
+{
+  "timestamp": "2026-03-03T14:23:10Z",
+  "id": "evt_ghi789",
+  "tool": "exec",
+  "agent": "claude-code",
+  "session": "myapp/main",
+  "request": {
+    "command": "kubectl apply -f prod.yaml"
+  },
+  "decision": {
+    "action": "ask",
+    "resolved": "approved",
+    "resolved_by": "user@localhost",
+    "resolved_at": "2026-03-03T14:23:15Z",
+    "matched_policies": ["production-deploys"],
+    "message": "Production deployment requires approval",
+    "eval_duration_us": 6
+  },
+  "prev_hash": "sha256:...",
+  "this_hash": "sha256:..."
+}
+```
+
+Note the `resolved`, `resolved_by`, and `resolved_at` fields — only present when `audit: true` is set.
+
+### Credential Access Blocked
+
+```json
+{
+  "timestamp": "2026-03-03T14:23:20Z",
+  "id": "evt_jkl012",
+  "tool": "read",
+  "agent": "claude-code",
+  "session": "myapp/main",
+  "request": {
+    "path": "/home/user/.ssh/id_rsa"
+  },
+  "decision": {
+    "action": "deny",
+    "matched_policies": ["block-credential-access"],
+    "message": "SSH private key access blocked",
+    "eval_duration_us": 3
+  },
+  "prev_hash": "sha256:...",
+  "this_hash": "sha256:..."
+}
+```
+
+## Log Rotation
+
+Rampart rotates audit logs automatically:
+
+- **Daily rotation**: New file created at midnight UTC
+- **Naming**: `audit-2026-03-03.jsonl`
+- **Retention**: Keeps last 90 days by default
+- **Chain continuity**: First entry in new file references last entry in previous file
+
+Configure retention:
+
+```bash
+rampart serve --audit-retention 365  # Keep 1 year
+```
+
+## Exporting Audit Logs
+
+### JSON Export
+
+```bash
+rampart audit search --since "2026-03-01" --format json > audit-march.json
+```
+
+### CSV Export
+
+```bash
+rampart audit search --since "2026-03-01" --format csv > audit-march.csv
+```
+
+CSV format:
+
+```csv
+timestamp,id,tool,agent,session,action,command,path,message,policies
+2026-03-03T14:23:05Z,evt_def456,exec,claude-code,myapp/main,deny,"rm -rf /tmp/*",,Destructive command blocked,block-destructive
+```
+
+## Protecting Audit Logs
+
+Run `rampart serve` as a separate user to prevent agent tampering:
+
+```bash
+# Create a service account
+sudo useradd -r -s /usr/sbin/nologin rampart
+
+# Move audit directory
+sudo mkdir -p /var/lib/rampart/audit
+sudo chown -R rampart:rampart /var/lib/rampart
+sudo chmod 700 /var/lib/rampart/audit
+
+# Run serve as the rampart user
+rampart serve --audit-dir /var/lib/rampart/audit
+```
+
+The agent communicates with Rampart over HTTP on localhost — no file access needed. This prevents:
+
+- **Audit log tampering**: Agent can't modify or delete events
+- **Credential harvesting**: Agent can't read previously-logged secrets
+- **Chain verification bypass**: Agent can't inject forged events
+
+## Performance
+
+Audit logging adds negligible overhead:
+
+- **Write latency**: < 1ms per event
+- **Disk usage**: ~500 bytes per event
+- **Hash computation**: SHA-256 in ~10µs
+- **Chain verification**: ~1,000 events/sec
+
+## See Also
+
+- [SIEM Integration](/features/siem-integration) — Export to Splunk, Wazuh, QRadar
+- [Approval Flow](/features/approval-flow) — Human-in-the-loop approvals
+- [Live Dashboard](/features/live-dashboard) — Real-time event monitoring

@@ -1,0 +1,321 @@
+---
+title: rampart serve
+description: Start Rampart policy runtime and HTTP API
+---
+
+Runs the Rampart policy engine as a background service, providing an HTTP API for tool call evaluation, approvals, and audit.
+
+## Usage
+
+```bash
+rampart serve [flags]
+rampart serve install
+rampart serve stop
+```
+
+## Flags
+
+<ParamField path="--port" type="integer" default="9090">
+  HTTP API listen port. Use `0` for SDK-only mode (no HTTP server).
+</ParamField>
+
+<ParamField path="--addr" type="string" default="">
+  Bind address. Empty = all interfaces. Use `127.0.0.1` to bind localhost only.
+</ParamField>
+
+<ParamField path="--mode" type="string" default="enforce">
+  Runtime mode: `enforce`, `monitor`, or `disabled`
+</ParamField>
+
+<ParamField path="--audit-dir" type="string" default="~/.rampart/audit">
+  Directory for audit logs (JSONL files)
+</ParamField>
+
+<ParamField path="--config-dir" type="string" default="~/.rampart/policies/">
+  Directory of additional policy YAML files (merged with `--config`)
+</ParamField>
+
+<ParamField path="--reload-interval" type="duration" default="0">
+  How often to re-read policy files. `0` = disabled (fsnotify handles hot-reload)
+</ParamField>
+
+<ParamField path="--approval-timeout" type="duration" default="1h">
+  How long approvals stay pending before expiring
+</ParamField>
+
+<ParamField path="--syslog" type="string">
+  Syslog server address (e.g. `localhost:514`)
+</ParamField>
+
+<ParamField path="--cef" type="boolean" default="false">
+  Use CEF format. With `--syslog`: CEF over syslog. Standalone: write `~/.rampart/audit/cef.log`
+</ParamField>
+
+<ParamField path="--resolve-base-url" type="string">
+  Base URL for approval resolve links (e.g. `https://rampart.example.com:9090`)
+</ParamField>
+
+<ParamField path="--signing-key" type="string" default="~/.rampart/signing.key">
+  Path to HMAC signing key for resolve URLs (auto-generated if missing)
+</ParamField>
+
+<ParamField path="--metrics" type="boolean" default="false">
+  Enable Prometheus metrics endpoint on `/metrics`
+</ParamField>
+
+<ParamField path="--background" type="boolean" default="false">
+  Run in background and write logs to `~/.rampart/serve.log`
+</ParamField>
+
+## Subcommands
+
+### install
+
+```bash
+rampart serve install
+```
+
+Installs `rampart serve` as a boot service (systemd on Linux, launchd on macOS). Auto-generates and persists a bearer token to `~/.rampart/token`.
+
+**What it does:**
+- Creates systemd user service or LaunchAgent
+- Generates and saves token to `~/.rampart/token`
+- Starts and enables the service
+- Defaults to port 9090
+
+**Output:**
+```
+✓ Service installed: rampart.service
+✓ Token saved to ~/.rampart/token
+✓ Service started and enabled
+  🔑 Token: rampart_a7f3c2e8...
+  🌐 Dashboard: http://localhost:9090/dashboard/
+```
+
+### stop
+
+```bash
+rampart serve stop
+```
+
+Stops a background serve process started with `--background` by reading the PID from `~/.rampart/serve.pid` and sending SIGTERM.
+
+## Examples
+
+### Foreground mode
+
+```bash
+# Start with defaults
+rampart serve
+
+# Custom port and audit directory
+rampart serve --port 8080 --audit-dir ./audit
+
+# Monitor mode (log only, don't block)
+rampart serve --mode monitor
+
+# Localhost only
+rampart serve --addr 127.0.0.1
+```
+
+### Background mode
+
+```bash
+# Start in background
+rampart serve --background
+
+# Stop background process
+rampart serve stop
+```
+
+### Service installation
+
+```bash
+# Install and start as systemd/launchd service
+rampart serve install
+
+# Custom port
+rampart serve install --port 8080
+
+# Force reinstall
+rampart serve install --force
+```
+
+### SIEM integration
+
+```bash
+# RFC 5424 syslog
+rampart serve --syslog localhost:514
+
+# CEF over syslog
+rampart serve --syslog localhost:514 --cef
+
+# CEF to file
+rampart serve --cef
+```
+
+### Custom approval timeout
+
+```bash
+# 30 minute approval window
+rampart serve --approval-timeout 30m
+
+# 2 hour approval window
+rampart serve --approval-timeout 2h
+```
+
+## API endpoints
+
+When running, serve exposes an HTTP API:
+
+### Tool evaluation
+
+```bash
+POST /v1/tool/{toolName}
+POST /v1/preflight/{toolName}  # dry-run check
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:9090/v1/tool/exec \
+  -H "Authorization: Bearer $RAMPART_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "my-agent",
+    "session": "main",
+    "params": {"command": "ls -la"}
+  }'
+```
+
+### Approvals
+
+```bash
+GET  /v1/approvals                    # list pending
+POST /v1/approvals/{id}/resolve       # approve or deny
+GET  /v1/approvals/{id}               # get status
+```
+
+### Health
+
+```bash
+GET /healthz                          # health check
+GET /metrics                          # Prometheus metrics (if --metrics enabled)
+```
+
+### Dashboard
+
+```bash
+GET /dashboard/                       # web UI
+```
+
+## Output
+
+### Startup (foreground)
+
+```
+Rampart ready  —  :9090 (token=rampart_a7f3c2...)
+  🔑 Full token : rampart_a7f3c2e8b5d9f1a4c6e7d8f9a0b1c2d3e4f5a6b7c8d9e0f1
+  🌐 Dashboard  : http://localhost:9090/dashboard/
+```
+
+### Startup (background)
+
+```
+rampart serve running in background (pid=12345, log=~/.rampart/serve.log)
+```
+
+## Policy loading
+
+Serve loads policies from multiple sources (merged in order):
+
+1. **`--config` file** (default: `rampart.yaml`)
+2. **`--config-dir` directory** (default: `~/.rampart/policies/`)
+3. **Embedded standard policy** (fallback if no files found)
+
+Policy files are hot-reloaded on change (fsnotify) or periodically if `--reload-interval` is set.
+
+## Token management
+
+Serve auto-generates a bearer token on first run:
+
+**Priority (highest to lowest):**
+1. `RAMPART_TOKEN` env var
+2. `~/.rampart/token` file (persisted by `serve install`)
+3. Auto-generated (saved to `~/.rampart/token`)
+
+**View token:**
+```bash
+cat ~/.rampart/token
+# or
+rampart token
+```
+
+**Rotate token:**
+```bash
+rampart token rotate
+```
+
+## Audit output
+
+Serve writes audit events to:
+
+1. **JSONL** - `~/.rampart/audit/audit-hook-YYYY-MM-DD.jsonl` (daily files)
+2. **Syslog** - if `--syslog` is set (RFC 5424 or CEF format)
+3. **CEF file** - `~/.rampart/audit/cef.log` if `--cef` is set without `--syslog`
+
+All formats run simultaneously.
+
+## Dashboard
+
+The web dashboard (http://localhost:9090/dashboard/) provides:
+
+- **Active** tab - Live stream of tool calls, approve/deny queued requests
+- **History** tab - Browse past tool calls with filtering
+- **Policy** tab - View loaded rules, test commands with REPL
+
+Supports dark and light themes.
+
+## Troubleshooting
+
+### Port already in use
+
+```bash
+# Find process using port
+lsof -i :9090
+
+# Use different port
+rampart serve --port 8080
+```
+
+### Policy file not found
+
+```bash
+# Use embedded standard policy
+rampart serve  # auto-fallback
+
+# Or create policy
+rampart init --profile standard
+rampart serve --config ~/.rampart/policies/standard.yaml
+```
+
+### Token file not readable
+
+```bash
+# Check permissions
+ls -la ~/.rampart/token
+
+# Regenerate
+rampart token rotate
+```
+
+## Exit codes
+
+- `0` - Clean shutdown
+- `1` - Startup or runtime error
+
+## See also
+
+- [rampart quickstart](/cli/quickstart) - Automated installation
+- [rampart token](/cli/approve-deny#token) - Token management
+- [rampart policy](/cli/policy) - Policy commands
+- [rampart audit](/cli/audit) - Audit commands

@@ -1,0 +1,362 @@
+---
+title: rampart preload
+description: LD_PRELOAD syscall interception for universal protection
+---
+
+Runs a command with `librampart.so` preloaded, intercepting `execve`, `execvp`, `system()`, `popen()`, and `posix_spawn()` at the OS level.
+
+## Usage
+
+```bash
+rampart preload -- <command> [args...]
+```
+
+Note the `--` separator before the command.
+
+## How it works
+
+**Linux:** Sets `LD_PRELOAD=~/.rampart/lib/librampart.so`
+
+**macOS:** Sets `DYLD_INSERT_LIBRARIES=~/.rampart/lib/librampart.dylib`
+
+The library intercepts exec-family syscalls:
+- `execve()` - Execute program
+- `execvp()` - Execute program (search PATH)
+- `execvpe()` - Execute program with environment
+- `system()` - Execute shell command
+- `popen()` - Open process pipe
+- `posix_spawn()` - Spawn process
+
+Before each syscall executes, the library:
+1. Extracts command from syscall arguments
+2. Sends to Rampart HTTP API for evaluation
+3. Returns `EPERM` if denied
+4. Proceeds if allowed
+
+## Flags
+
+<ParamField path="--port" type="integer" default="9090">
+  Port for rampart serve (must match `rampart serve --port`)
+</ParamField>
+
+<ParamField path="--token" type="string">
+  Auth token (or set `RAMPART_TOKEN`)
+</ParamField>
+
+<ParamField path="--mode" type="string" default="enforce">
+  Mode: `enforce`, `monitor`, or `disabled`
+</ParamField>
+
+<ParamField path="--fail-open" type="boolean" default="true">
+  Allow commands if Rampart is unreachable (fail-safe mode)
+</ParamField>
+
+<ParamField path="--agent" type="string" default="preload">
+  Agent name for audit events
+</ParamField>
+
+<ParamField path="--session" type="string">
+  Session ID for audit (default: `preload-{pid}`)
+</ParamField>
+
+<ParamField path="--debug" type="boolean" default="false">
+  Enable debug logging in the library
+</ParamField>
+
+## Examples
+
+### Protect Codex CLI
+
+```bash
+# Linux: use wrapper (recommended)
+rampart setup codex
+codex  # wrapper installed at ~/.local/bin/codex
+
+# macOS: use preload
+rampart preload -- codex
+```
+
+### Protect any Python agent
+
+```bash
+rampart preload -- python my_agent.py
+
+# With custom session
+rampart preload --session research-run-1 -- python agent.py
+```
+
+### Protect Node.js agent
+
+```bash
+rampart preload -- node agent.js
+```
+
+### Monitor mode
+
+```bash
+# Log only, don't block
+rampart preload --mode monitor -- risky-tool
+```
+
+### Fail-closed mode
+
+```bash
+# Deny all commands if Rampart is unreachable
+rampart preload --fail-open=false -- agent
+```
+
+## Library installation
+
+**Build from source:**
+```bash
+cd rampart/preload
+make
+cp librampart.so ~/.rampart/lib/  # Linux
+cp librampart.dylib ~/.rampart/lib/  # macOS
+```
+
+**Download from releases:**
+```bash
+# Linux
+wget https://github.com/peg/rampart/releases/download/v0.7.0/librampart-linux-amd64.so
+mkdir -p ~/.rampart/lib
+mv librampart-linux-amd64.so ~/.rampart/lib/librampart.so
+
+# macOS
+wget https://github.com/peg/rampart/releases/download/v0.7.0/librampart-darwin-arm64.dylib
+mkdir -p ~/.rampart/lib
+mv librampart-darwin-arm64.dylib ~/.rampart/lib/librampart.dylib
+```
+
+**Verify:**
+```bash
+ls -la ~/.rampart/lib/
+# Should show librampart.so (Linux) or librampart.dylib (macOS)
+```
+
+## Platform support
+
+### Linux
+
+**Coverage:** ~95% of dynamically-linked binaries
+
+**Works with:**
+- Binaries from package managers (apt, yum, pacman)
+- Binaries installed via pip, npm, cargo, go install
+- Most scripting languages (Python, Node.js, Ruby, Perl)
+
+**Doesn't work with:**
+- Statically-linked binaries (Go binaries compiled without CGO)
+- Binaries that explicitly clear `LD_PRELOAD`
+
+### macOS
+
+**Coverage:** Works with most user-installed binaries
+
+**Works with:**
+- Homebrew binaries
+- nvm/Node.js
+- pyenv/Python
+- rbenv/Ruby
+- cargo/Rust binaries
+
+**Blocked by SIP:**
+- `/usr/bin/*` - macOS System Integrity Protection blocks preload
+- `/bin/*` - SIP-protected
+- `/sbin/*` - SIP-protected
+
+**Note:** AI agents don't typically run from SIP-protected locations, so coverage is good in practice.
+
+### Windows
+
+Not supported. Use `rampart wrap` instead.
+
+## Output
+
+### Startup
+
+```bash
+rampart preload -- python agent.py
+# (library loads silently)
+```
+
+### Blocked command
+
+```
+# Agent calls: os.system("rm -rf /important")
+rampart: blocked — Destructive command blocked
+# Python sees: OSError: [Errno 1] Operation not permitted
+```
+
+### Debug mode
+
+```bash
+rampart preload --debug -- python agent.py
+```
+
+**Debug output:**
+```
+rampart_preload: intercepted execve: /bin/bash -c "ls -la"
+rampart_preload: sending to http://localhost:9090/v1/preflight/exec
+rampart_preload: decision: allow
+rampart_preload: proceeding with syscall
+```
+
+## Environment variables
+
+The library reads these variables:
+
+<ParamField path="RAMPART_URL" type="string" default="http://127.0.0.1:9090">
+  Rampart serve API URL
+</ParamField>
+
+<ParamField path="RAMPART_TOKEN" type="string">
+  Bearer token for API authentication
+</ParamField>
+
+<ParamField path="RAMPART_MODE" type="string" default="enforce">
+  Mode: `enforce`, `monitor`, or `disabled`
+</ParamField>
+
+<ParamField path="RAMPART_FAIL_OPEN" type="string" default="1">
+  `1` = allow if Rampart unreachable, `0` = deny
+</ParamField>
+
+<ParamField path="RAMPART_AGENT" type="string" default="preload">
+  Agent name for audit events
+</ParamField>
+
+<ParamField path="RAMPART_SESSION" type="string">
+  Session ID for audit
+</ParamField>
+
+<ParamField path="RAMPART_DEBUG" type="string">
+  `1` = enable debug logging to stderr
+</ParamField>
+
+## Cascade protection
+
+Preload protects subprocess trees:
+
+```bash
+rampart preload -- python agent.py
+  └─ agent spawns: bash -c "npm install"
+      └─ npm spawns: node install.js
+          └─ node spawns: /bin/sh -c "build.sh"
+```
+
+All spawns are intercepted because `LD_PRELOAD` is inherited.
+
+## Performance
+
+**Per-command overhead:**
+- Policy check: 4μs
+- HTTP call (localhost): less than 1ms
+- Total: ~1ms per command
+
+**Measured on:**
+- Intel i7, Linux 6.x, localhost HTTP
+- Invisible latency for normal agent workflows
+
+## Compatibility with other tools
+
+### Go binaries
+
+**CGO-enabled:** Works ✅
+
+**Static (default Go build):** Doesn't work ❌
+
+**Fix:**
+```bash
+# Rebuild with CGO
+CGO_ENABLED=1 go build -o agent
+rampart preload -- ./agent
+```
+
+### Docker
+
+**Inside container:** Works if librampart is mounted
+
+```bash
+docker run -v ~/.rampart/lib:/lib/rampart \
+  -e LD_PRELOAD=/lib/rampart/librampart.so \
+  -e RAMPART_URL=http://host.docker.internal:9090 \
+  myagent
+```
+
+### Rust/Cargo
+
+**Dynamic linking (default):** Works ✅
+
+### Python
+
+Works ✅ (Python is dynamically linked)
+
+### Node.js
+
+Works ✅ (Node.js is dynamically linked)
+
+## Troubleshooting
+
+### "librampart.so not found"
+
+**Check library exists:**
+```bash
+ls -la ~/.rampart/lib/librampart.so  # Linux
+ls -la ~/.rampart/lib/librampart.dylib  # macOS
+```
+
+**Install from releases or build from source** (see above)
+
+### Commands still bypassing
+
+**Check if binary is static:**
+```bash
+ldd /path/to/binary
+# If output is "not a dynamic executable", preload won't work
+```
+
+**Use wrapper instead:**
+```bash
+rampart wrap -- binary
+```
+
+### macOS: "Operation not permitted"
+
+**SIP is blocking preload:**
+```bash
+# Check if binary is SIP-protected
+codesign -d -vv /path/to/binary 2>&1 | grep -i restrict
+```
+
+**Workaround:** Use `rampart wrap` or install binary outside SIP-protected locations.
+
+### Serve not reachable
+
+**Check serve is running:**
+```bash
+curl http://localhost:9090/healthz
+```
+
+**Start serve:**
+```bash
+rampart serve install
+```
+
+**Check port:**
+```bash
+rampart preload --port 9090 -- agent  # must match rampart serve --port
+```
+
+## Exit codes
+
+- `0` - Command exited successfully
+- `126` - Command was blocked by policy
+- `1` - Operation not permitted (EPERM from denied syscall)
+- Other - Command's actual exit code
+
+## See also
+
+- [rampart wrap](/cli/wrap) - Shell-based wrapping
+- [rampart setup](/cli/setup) - Native agent hooks
+- [Preload README](https://github.com/peg/rampart/tree/main/preload) - Build instructions

@@ -1,0 +1,578 @@
+---
+title: 'Approvals'
+description: 'Manage approval workflows via the Rampart API'
+---
+
+## Overview
+
+The approvals API manages human-in-the-loop workflows for sensitive operations. When a policy decision is `ask` or `require_approval`, the tool call is queued pending human review.
+
+<Info>
+Approvals expire after 1 hour by default (configurable with `--approval-timeout`).
+</Info>
+
+## Endpoints
+
+### List Approvals
+
+```http
+GET /v1/approvals
+```
+
+Lists pending approvals plus grouped view by `run_id`.
+
+#### Request Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for authentication
+</ParamField>
+
+#### Response Fields
+
+<ResponseField name="approvals" type="array" required>
+  Array of pending approval objects
+  
+  <Expandable title="Approval object properties">
+    <ResponseField name="id" type="string">Approval ID</ResponseField>
+    <ResponseField name="tool" type="string">Tool name</ResponseField>
+    <ResponseField name="command" type="string">Command or path</ResponseField>
+    <ResponseField name="agent" type="string">Agent identifier</ResponseField>
+    <ResponseField name="session" type="string">Session identifier</ResponseField>
+    <ResponseField name="message" type="string">Decision message</ResponseField>
+    <ResponseField name="status" type="string">Status: `pending`, `approved`, or `denied`</ResponseField>
+    <ResponseField name="run_id" type="string">Run ID (if grouped)</ResponseField>
+    <ResponseField name="created_at" type="string">ISO 8601 timestamp</ResponseField>
+    <ResponseField name="expires_at" type="string">ISO 8601 timestamp</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="run_groups" type="array" required>
+  Array of run groups (runs with 2+ pending approvals)
+  
+  <Expandable title="Run group properties">
+    <ResponseField name="run_id" type="string">Run identifier</ResponseField>
+    <ResponseField name="count" type="integer">Number of approvals in group</ResponseField>
+    <ResponseField name="earliest_created_at" type="string">ISO 8601 timestamp of first approval</ResponseField>
+    <ResponseField name="items" type="array">Array of approval objects in this group</ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example
+
+```bash
+TOKEN="$(cat ~/.rampart/token)"
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:9090/v1/approvals"
+```
+
+**Response (200 OK):**
+```json
+{
+  "approvals": [
+    {
+      "id": "01J9K8L7M6N5",
+      "tool": "exec",
+      "command": "kubectl apply -f prod.yaml",
+      "agent": "claude-code",
+      "session": "myapp/main",
+      "message": "production deployment requires approval",
+      "status": "pending",
+      "run_id": "run_01J...",
+      "created_at": "2026-03-03T10:15:30Z",
+      "expires_at": "2026-03-03T11:15:30Z"
+    }
+  ],
+  "run_groups": [
+    {
+      "run_id": "run_01J...",
+      "count": 3,
+      "earliest_created_at": "2026-03-03T10:15:30Z",
+      "items": [ /* approval objects */ ]
+    }
+  ]
+}
+```
+
+---
+
+### Get Single Approval
+
+```http
+GET /v1/approvals/{id}
+```
+
+Returns one approval by ID.
+
+#### Path Parameters
+
+<ParamField path="id" type="string" required>
+  Approval ID
+</ParamField>
+
+#### Request Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for authentication
+</ParamField>
+
+#### Response Fields
+
+<ResponseField name="id" type="string" required>Approval ID</ResponseField>
+<ResponseField name="tool" type="string" required>Tool name</ResponseField>
+<ResponseField name="command" type="string" required>Command or path</ResponseField>
+<ResponseField name="agent" type="string" required>Agent identifier</ResponseField>
+<ResponseField name="session" type="string" required>Session identifier</ResponseField>
+<ResponseField name="message" type="string" required>Decision message</ResponseField>
+<ResponseField name="status" type="string" required>Status: `pending`, `approved`, or `denied`</ResponseField>
+<ResponseField name="created_at" type="string" required>ISO 8601 timestamp</ResponseField>
+<ResponseField name="expires_at" type="string" required>ISO 8601 timestamp</ResponseField>
+<ResponseField name="resolved_at" type="string">ISO 8601 timestamp (only if resolved)</ResponseField>
+<ResponseField name="resolved_by" type="string">Resolver identifier (only if resolved)</ResponseField>
+
+#### Example
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:9090/v1/approvals/01J9K8L7M6N5"
+```
+
+**Response (200 OK):**
+```json
+{
+  "id": "01J9K8L7M6N5",
+  "tool": "exec",
+  "command": "kubectl delete pod critical",
+  "agent": "claude-code",
+  "session": "myapp/production",
+  "message": "production change requires approval",
+  "status": "approved",
+  "created_at": "2026-03-03T10:15:30Z",
+  "expires_at": "2026-03-03T11:15:30Z",
+  "resolved_at": "2026-03-03T10:20:15Z",
+  "resolved_by": "security-team"
+}
+```
+
+#### Status Codes
+
+| Status | Meaning |
+|--------|----------|
+| `200 OK` | Approval found |
+| `401 Unauthorized` | Missing or invalid token |
+| `404 Not Found` | Approval not found |
+
+---
+
+### Create Approval
+
+```http
+POST /v1/approvals
+```
+
+Creates an external/manual approval request.
+
+<Note>
+This endpoint is typically used by integrations that need to create approvals outside of the normal tool evaluation flow.
+</Note>
+
+#### Request Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for authentication
+</ParamField>
+
+<ParamField header="Content-Type" type="string" required>
+  Must be `application/json`
+</ParamField>
+
+#### Request Body
+
+<ParamField body="tool" type="string" required>
+  Tool name (e.g., `exec`, `read`, `write`)
+</ParamField>
+
+<ParamField body="agent" type="string" required>
+  Agent identifier
+</ParamField>
+
+<ParamField body="message" type="string" required>
+  Human-readable reason for approval request
+</ParamField>
+
+<ParamField body="command" type="string">
+  Command to execute (for `exec` tool)
+</ParamField>
+
+<ParamField body="path" type="string">
+  File path (for `read`/`write` tools)
+</ParamField>
+
+<ParamField body="run_id" type="string">
+  Run identifier for grouping
+</ParamField>
+
+#### Response Fields
+
+<ResponseField name="id" type="string" required>
+  Created approval ID
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Status: `pending` or `approved` (auto-approved if run is bulk-approved)
+</ResponseField>
+
+<ResponseField name="expires_at" type="string" required>
+  ISO 8601 timestamp when approval expires
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Additional message (only for auto-approved cases)
+</ResponseField>
+
+#### Example
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/approvals" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tool": "exec",
+    "command": "kubectl delete pod foo",
+    "agent": "claude-code",
+    "message": "requires approval"
+  }'
+```
+
+**Response (201 Created):**
+```json
+{
+  "id": "01J9K8L7M6N5",
+  "status": "pending",
+  "expires_at": "2026-03-03T11:15:30Z"
+}
+```
+
+**Response (200 OK) — Auto-approved:**
+```json
+{
+  "id": "01J9K8L7M6N5",
+  "status": "approved",
+  "message": "auto-approved by bulk-resolve",
+  "expires_at": "2026-03-03T11:15:30Z"
+}
+```
+
+#### Status Codes
+
+| Status | Meaning |
+|--------|----------|
+| `201 Created` | Approval created |
+| `200 OK` | Auto-approved by run cache |
+| `400 Bad Request` | Invalid JSON |
+| `401 Unauthorized` | Missing or invalid token |
+| `503 Service Unavailable` | Approval queue full |
+
+---
+
+### Resolve Approval
+
+```http
+POST /v1/approvals/{id}/resolve
+```
+
+Approves or denies a pending approval.
+
+#### Path Parameters
+
+<ParamField path="id" type="string" required>
+  Approval ID to resolve
+</ParamField>
+
+#### Request Headers
+
+<ParamField header="Authorization" type="string">
+  Bearer token (not required if valid signed `sig` + `exp` query params are provided)
+</ParamField>
+
+<ParamField header="Content-Type" type="string" required>
+  Must be `application/json`
+</ParamField>
+
+#### Request Body
+
+<ParamField body="approved" type="boolean" required>
+  `true` to approve, `false` to deny
+</ParamField>
+
+<ParamField body="resolved_by" type="string">
+  Identifier of the resolver (e.g., `security-team`, `api`, `cli`). Defaults to `api`.
+</ParamField>
+
+<ParamField body="persist" type="boolean">
+  If `true` and `approved` is `true`, adds an auto-allow rule to `~/.rampart/policies/auto-allowed.yaml`
+</ParamField>
+
+#### Response Fields
+
+<ResponseField name="id" type="string" required>
+  Approval ID
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  New status: `approved` or `denied`
+</ResponseField>
+
+<ResponseField name="approved" type="boolean" required>
+  Whether the approval was granted
+</ResponseField>
+
+<ResponseField name="persisted" type="boolean" required>
+  Whether an auto-allow rule was created
+</ResponseField>
+
+#### Example — Approve
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/approvals/01J9K8L7M6N5/resolve" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "approved": true,
+    "resolved_by": "security-team",
+    "persist": false
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "id": "01J9K8L7M6N5",
+  "status": "approved",
+  "approved": true,
+  "persisted": false
+}
+```
+
+#### Example — Deny
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/approvals/01J9K8L7M6N5/resolve" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "approved": false,
+    "resolved_by": "cli"
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "id": "01J9K8L7M6N5",
+  "status": "denied",
+  "approved": false,
+  "persisted": false
+}
+```
+
+#### Example — Approve and Persist
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/approvals/01J9K8L7M6N5/resolve" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "approved": true,
+    "resolved_by": "user",
+    "persist": true
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "id": "01J9K8L7M6N5",
+  "status": "approved",
+  "approved": true,
+  "persisted": true
+}
+```
+
+<Info>
+When `persist: true`, Rampart adds an auto-allow rule to `~/.rampart/policies/auto-allowed.yaml` so future identical tool calls are automatically approved.
+</Info>
+
+#### Status Codes
+
+| Status | Meaning |
+|--------|----------|
+| `200 OK` | Approval resolved |
+| `400 Bad Request` | Invalid JSON |
+| `401 Unauthorized` | Invalid token/signature |
+| `404 Not Found` | Unknown approval ID |
+| `410 Gone` | Approval already resolved (replay attempt) |
+
+---
+
+### Bulk Resolve
+
+```http
+POST /v1/approvals/bulk-resolve
+```
+
+Bulk approves or denies all pending approvals for one `run_id`.
+
+<Warning>
+This endpoint requires a non-empty `run_id` to prevent accidental mass-approval of unrelated operations.
+</Warning>
+
+#### Request Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for authentication
+</ParamField>
+
+<ParamField header="Content-Type" type="string" required>
+  Must be `application/json`
+</ParamField>
+
+#### Request Body
+
+<ParamField body="run_id" type="string" required>
+  Run identifier — all pending approvals with this `run_id` will be resolved
+</ParamField>
+
+<ParamField body="action" type="string" required>
+  Must be `approve` or `deny`
+</ParamField>
+
+<ParamField body="resolved_by" type="string">
+  Resolver identifier. Defaults to `api`.
+</ParamField>
+
+#### Response Fields
+
+<ResponseField name="resolved" type="integer" required>
+  Number of approvals resolved
+</ResponseField>
+
+<ResponseField name="ids" type="array" required>
+  Array of resolved approval IDs
+</ResponseField>
+
+#### Example
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/approvals/bulk-resolve" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "run_id": "run_01J...",
+    "action": "approve",
+    "resolved_by": "api"
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "resolved": 3,
+  "ids": ["01J9K8L7M6N5", "01J9K8L7M6N6", "01J9K8L7M6N7"]
+}
+```
+
+#### Status Codes
+
+| Status | Meaning |
+|--------|----------|
+| `200 OK` | Bulk resolve completed |
+| `400 Bad Request` | Missing/empty `run_id` or invalid `action` |
+| `401 Unauthorized` | Missing or invalid token |
+
+<Note>
+When you bulk-approve a run, the `run_id` is cached. Subsequent tool calls with the same `run_id` are automatically approved without creating new approvals.
+</Note>
+
+## Signed URL Authorization
+
+When server-side signing is enabled (`rampart serve --sign`), approval resolution can be authorized via HMAC-signed URLs instead of bearer tokens.
+
+### Example Signed URL
+
+```
+http://127.0.0.1:9090/v1/approvals/01J.../resolve?sig=abc123&exp=1709481600
+```
+
+- `sig` — HMAC signature
+- `exp` — Unix timestamp when the signature expires
+
+### Usage
+
+```bash
+# No Authorization header needed
+curl -X POST "http://127.0.0.1:9090/v1/approvals/01J.../resolve?sig=abc&exp=1234" \
+  -H "Content-Type: application/json" \
+  -d '{"approved":true,"resolved_by":"webhook"}'
+```
+
+<Info>
+Signed URLs are single-use and time-limited. They're included in webhook notifications when signing is enabled.
+</Info>
+
+## Common Use Cases
+
+### Approval Dashboard
+
+```python
+import requests
+import os
+
+token = open(os.path.expanduser("~/.rampart/token")).read().strip()
+headers = {"Authorization": f"Bearer {token}"}
+
+# List pending approvals
+response = requests.get(
+    "http://localhost:9090/v1/approvals",
+    headers=headers
+)
+approvals = response.json()["approvals"]
+
+# Display to user
+for approval in approvals:
+    print(f"{approval['id']}: {approval['command']}")
+    print(f"  Agent: {approval['agent']}")
+    print(f"  Expires: {approval['expires_at']}")
+
+# Approve one
+requests.post(
+    f"http://localhost:9090/v1/approvals/{approvals[0]['id']}/resolve",
+    headers={**headers, "Content-Type": "application/json"},
+    json={"approved": True, "resolved_by": "dashboard"}
+)
+```
+
+### Bulk Approve CI Runs
+
+```bash
+#!/bin/bash
+# Approve all pending operations for a CI run
+
+RUN_ID="$1"
+TOKEN="$(cat ~/.rampart/token)"
+
+curl -X POST "http://127.0.0.1:9090/v1/approvals/bulk-resolve" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"run_id":"'"$RUN_ID"'","action":"approve","resolved_by":"ci-approver"}'
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Events" icon="bolt" href="/api/events">
+    Real-time event streaming
+  </Card>
+  <Card title="Status" icon="circle-check" href="/api/status">
+    Server status and health
+  </Card>
+</CardGroup>

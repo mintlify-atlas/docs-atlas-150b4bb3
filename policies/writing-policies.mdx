@@ -1,0 +1,444 @@
+---
+title: Writing Policies
+description: Write custom YAML policies to control AI agent behavior
+---
+
+Rampart policies are YAML files that define what AI agents can and cannot do. Glob matching, hot-reload on file change.
+
+## Quick Start
+
+```bash
+# Create a custom policy
+rampart init
+
+# Edit the generated policy
+vim ~/.rampart/policies/custom.yaml
+```
+
+The `custom.yaml` file is never overwritten by `rampart upgrade` — your rules persist across updates.
+
+## Policy Structure
+
+```yaml
+version: "1"
+default_action: allow  # allow or deny
+
+policies:
+  - name: block-destructive
+    priority: 1  # Lower = evaluated first
+    match:
+      tool: ["exec"]
+    rules:
+      - action: deny
+        when:
+          command_matches: ["rm -rf /"]
+        message: "Destructive command blocked"
+```
+
+## Schema Reference
+
+### Top-Level Fields
+
+<ParamField path="version" type="string" required>
+  Policy schema version. Always `"1"`.
+</ParamField>
+
+<ParamField path="default_action" type="string" required>
+  Fallback action when no rules match. Either `allow` or `deny`.
+</ParamField>
+
+<ParamField path="policies" type="array" required>
+  List of policy objects. Each policy contains match criteria and rules.
+</ParamField>
+
+### Policy Object
+
+<ParamField path="name" type="string" required>
+  Policy identifier. Used in audit logs and deny messages.
+</ParamField>
+
+<ParamField path="description" type="string">
+  Human-readable explanation of what this policy does.
+</ParamField>
+
+<ParamField path="priority" type="integer">
+  Evaluation priority. Lower numbers are evaluated first. Default: `100`.
+</ParamField>
+
+<ParamField path="match" type="object" required>
+  Scope this policy to specific tools or agents.
+  
+  **Fields:**
+  - `tool`: Array of tool names (e.g., `["exec", "read"]`). Use `["*"]` to match all tools.
+  - `agent`: Array of agent names (e.g., `["claude-code"]`). Default: `["*"]`.
+</ParamField>
+
+<ParamField path="rules" type="array" required>
+  List of rule objects. First matching rule wins.
+</ParamField>
+
+### Rule Object
+
+<ParamField path="action" type="string" required>
+  What to do when this rule matches:
+  - `deny`: Block the operation
+  - `allow`: Permit the operation
+  - `watch`: Log but allow (alias: `log`)
+  - `ask`: Request human approval (alias: `require_approval`)
+</ParamField>
+
+<ParamField path="when" type="object" required>
+  Conditions that must match for this rule to apply.
+</ParamField>
+
+<ParamField path="message" type="string" required>
+  Message shown when this rule triggers.
+</ParamField>
+
+## Match Conditions
+
+The `when` block supports these matchers:
+
+### Command Matching (tool: exec)
+
+<ParamField path="command_matches" type="array">
+  Glob patterns. Matches full command string.
+  
+  ```yaml
+  command_matches:
+    - "rm -rf /"
+    - "sudo **"
+    - "curl ** | bash"
+  ```
+  
+  Use `**` to match paths with slashes (max 2 per pattern).
+</ParamField>
+
+<ParamField path="command_not_matches" type="array">
+  Inverse of `command_matches`. Rule only applies if command does NOT match.
+  
+  ```yaml
+  command_matches:
+    - "rm -rf /var/**"
+  command_not_matches:
+    - "rm -rf /var/tmp/**"  # Allow /var/tmp cleanup
+  ```
+</ParamField>
+
+<ParamField path="command_contains" type="array">
+  Substring matching (case-insensitive). Catches shell wrapper bypasses.
+  
+  ```yaml
+  command_contains:
+    - "DROP TABLE"  # Matches "DROP TABLE users" and "drop table sessions"
+    - "rm -rf"
+  ```
+  
+  This is more robust than `command_matches` for detecting dangerous substrings in complex shell invocations.
+</ParamField>
+
+### Path Matching (tool: read, write, edit)
+
+<ParamField path="path_matches" type="array">
+  Glob patterns for file paths.
+  
+  ```yaml
+  path_matches:
+    - "**/.ssh/id_*"
+    - "**/.aws/credentials"
+    - "**/etc/shadow"
+  ```
+</ParamField>
+
+<ParamField path="path_not_matches" type="array">
+  Inverse of `path_matches`. Excludes paths from a broader match.
+  
+  ```yaml
+  path_matches:
+    - "**/.ssh/id_*"
+  path_not_matches:
+    - "**/*.pub"  # Allow public keys
+  ```
+</ParamField>
+
+### Domain Matching (tool: fetch)
+
+<ParamField path="domain_matches" type="array">
+  Glob patterns for domains.
+  
+  ```yaml
+  domain_matches:
+    - "*.ngrok.io"
+    - "*.requestbin.com"
+    - "webhook.site"
+  ```
+</ParamField>
+
+### Session Matching
+
+<ParamField path="session_matches" type="array">
+  Apply rule only to specific sessions (auto-detected as `repo/branch`).
+  
+  ```yaml
+  session_matches:
+    - "myapp/main"
+    - "myapp/production"
+  ```
+  
+  Override with `RAMPART_SESSION=my-label`.
+</ParamField>
+
+<ParamField path="session_not_matches" type="array">
+  Inverse of `session_matches`. Apply rule to all sessions except listed ones.
+  
+  ```yaml
+  session_not_matches:
+    - "myapp/dev"
+    - "myapp/test"
+  ```
+</ParamField>
+
+### Response Matching
+
+<ParamField path="response_matches" type="array">
+  Regex patterns to scan tool output. Used for credential leak detection.
+  
+  ```yaml
+  response_matches:
+    - "AKIA[0-9A-Z]{16}"  # AWS access key
+    - "-----BEGIN (RSA |EC )?PRIVATE KEY-----"
+    - "ghp_[a-zA-Z0-9]{36}"  # GitHub PAT
+  ```
+</ParamField>
+
+### Rate Limiting
+
+<ParamField path="call_count" type="object">
+  Trigger rule after N calls in a time window.
+  
+  ```yaml
+  call_count:
+    gte: 100
+    window: 1h
+  ```
+  
+  Available time units: `s`, `m`, `h`.
+</ParamField>
+
+## Action Types
+
+### deny
+
+Block the operation immediately. Agent never sees it.
+
+```yaml
+rules:
+  - action: deny
+    when:
+      command_matches: ["rm -rf /"]
+    message: "Destructive command blocked"
+```
+
+### allow
+
+Permit the operation. Use in combination with a `deny`-by-default policy.
+
+```yaml
+default_action: deny
+
+policies:
+  - name: dev-tools-allowlist
+    rules:
+      - action: allow
+        when:
+          command_matches:
+            - "git *"
+            - "npm *"
+            - "python3 *"
+        message: "Allowed dev tool"
+```
+
+### watch
+
+Log the operation but allow it. Alias: `log`.
+
+```yaml
+rules:
+  - action: watch
+    when:
+      command_matches: ["sudo **"]
+    message: "Privileged command logged"
+```
+
+### ask
+
+Request human approval. How it works depends on the environment:
+
+- **Claude Code**: Native approval prompt in the UI
+- **MCP clients**: Blocks until approved via API or dashboard
+- **OpenClaw**: Chat message with inline approve/deny
+- **Webhooks**: Signed URL sent to your notification endpoint
+
+```yaml
+rules:
+  - action: ask
+    when:
+      command_matches:
+        - "kubectl apply **"
+        - "terraform apply **"
+    message: "Production deployment requires approval"
+```
+
+Add `audit: true` to log user decisions:
+
+```yaml
+rules:
+  - action: ask
+    ask:
+      audit: true  # Log whether user approved or denied
+    when:
+      command_matches: ["kubectl apply **"]
+    message: "Production deployment requires approval"
+```
+
+Add `headless_only: true` to block in CI/headless mode:
+
+```yaml
+rules:
+  - action: ask
+    ask:
+      headless_only: true  # In CI, this becomes a deny
+    when:
+      command_matches: ["kubectl apply **"]
+    message: "Production deployment requires approval"
+```
+
+## Common Patterns
+
+### Block Dangerous Commands
+
+```yaml
+policies:
+  - name: block-destructive
+    match:
+      tool: ["exec"]
+    rules:
+      - action: deny
+        when:
+          command_matches:
+            - "rm -rf /"
+            - "mkfs*"
+            - "dd **of=/dev/sd**"
+          command_contains:
+            - "/dev/tcp/"  # Reverse shell redirect
+            - "| bash"     # Piped execution
+        message: "Destructive command blocked"
+```
+
+### Protect Credentials
+
+```yaml
+policies:
+  - name: block-credential-access
+    priority: 1  # Evaluate first
+    match:
+      tool: ["read"]
+    rules:
+      - action: deny
+        when:
+          path_matches:
+            - "**/.ssh/id_*"
+            - "**/.aws/credentials"
+            - "**/.env"
+          path_not_matches:
+            - "**/*.pub"
+            - "**/.env.example"
+        message: "Credential file access blocked"
+```
+
+### Require Approval for Privileged Operations
+
+```yaml
+policies:
+  - name: require-sudo-approval
+    match:
+      tool: ["exec"]
+    rules:
+      - action: ask
+        when:
+          command_matches: ["sudo **"]
+        message: "sudo requires approval"
+```
+
+### Rate Limit Fetch Calls
+
+```yaml
+policies:
+  - name: rate-limit-fetch
+    match:
+      tool: ["fetch", "web_search"]
+    rules:
+      - action: ask
+        when:
+          call_count:
+            gte: 100
+            window: 1h
+        message: "High fetch volume — require approval to continue"
+```
+
+## Testing Policies
+
+```bash
+# Test a single command
+rampart test "rm -rf /"
+# Output: deny  block-destructive  Destructive command blocked
+
+# Explain decision
+rampart policy explain "sudo apt install nginx"
+
+# Validate syntax
+rampart policy lint ~/.rampart/policies/custom.yaml
+```
+
+## Hot Reload
+
+Policy files are watched for changes. Edit and save — no restart required.
+
+```bash
+# Edit your policy
+vim ~/.rampart/policies/custom.yaml
+
+# Changes apply immediately
+rampart test "your-command-here"
+```
+
+## Evaluation Order
+
+1. **Priority** — policies are sorted by `priority` (lower = first)
+2. **First match wins** — within a policy, the first matching rule's action is used
+3. **Deny always wins** — if any policy denies, the action is denied
+
+```yaml
+policies:
+  - name: credential-protection
+    priority: 1  # Evaluated first
+    rules:
+      - action: deny
+        when:
+          path_matches: ["**/.ssh/id_*"]
+
+  - name: allow-dev-files
+    priority: 10  # Evaluated second
+    rules:
+      - action: allow
+        when:
+          path_matches: ["**/*.go", "**/*.py"]
+```
+
+Even if `allow-dev-files` matches, if `credential-protection` denies, the action is denied.
+
+## See Also
+
+- [Profiles](/policies/profiles) — Built-in policy presets
+- [Project Policies](/policies/project-policies) — Team-shared repo-specific rules
+- [Testing Policies](/policies/testing-policies) — Validate policies with `rampart test` and `rampart bench`

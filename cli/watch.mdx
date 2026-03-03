@@ -1,0 +1,226 @@
+---
+title: rampart watch
+description: Live TUI dashboard for audit events
+---
+
+Real-time terminal dashboard showing policy decisions, approvals, and audit events as they happen.
+
+## Usage
+
+```bash
+rampart watch [flags]
+```
+
+## Flags
+
+<ParamField path="--audit-dir" type="string" default="~/.rampart/audit">
+  Directory containing audit JSONL files
+</ParamField>
+
+<ParamField path="--policy" type="string" default="standard.yaml">
+  Policy file name to display in status header
+</ParamField>
+
+<ParamField path="--mode" type="string" default="enforce">
+  Display mode label (shown in header)
+</ParamField>
+
+<ParamField path="--agent" type="string" default="all">
+  Filter to a single agent in view
+</ParamField>
+
+<ParamField path="--decision" type="string">
+  Filter by decision: `allow`, `deny`, `log`, `webhook`
+</ParamField>
+
+<ParamField path="--tool" type="string">
+  Filter by tool name: `exec`, `read`, `write`, `fetch`
+</ParamField>
+
+<ParamField path="--serve-url" type="string" default="http://localhost:9090">
+  Serve API URL for interactive approvals
+</ParamField>
+
+<ParamField path="--serve-token" type="string">
+  Bearer token for serve API (auto-detected from `~/.rampart/token`)
+</ParamField>
+
+## Examples
+
+### Basic usage
+
+```bash
+# Watch all events
+rampart watch
+
+# Watch with custom audit directory
+rampart watch --audit-dir ./audit
+```
+
+### Filtering
+
+```bash
+# Show only denies
+rampart watch --decision deny
+
+# Show only exec tools
+rampart watch --tool exec
+
+# Show only claude-code agent
+rampart watch --agent claude-code
+
+# Combine filters
+rampart watch --tool exec --decision deny
+```
+
+### Interactive approvals
+
+```bash
+# Auto-discover serve URL and token
+rampart watch
+
+# Explicit serve config
+rampart watch --serve-url http://localhost:9090 --serve-token $RAMPART_TOKEN
+```
+
+## Display
+
+### Header
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║  RAMPART — enforce — 3 policies                             ║
+╠══════════════════════════════════════════════════════════════╣
+```
+
+### Event stream
+
+```
+║  ✅ 14:23:01 exec  "npm test"                 [allow-dev]   ║
+║  ✅ 14:23:03 read  ~/project/src/main.go      [default]     ║
+║  🔴 14:23:05 exec  "rm -rf /tmp/*"            [protect-sys] ║
+║  🟡 14:23:08 exec  "curl https://api.io"       [log-http]    ║
+║  👤 14:23:10 exec  "kubectl apply -f prod"   [approval]    ║
+```
+
+**Color coding:**
+- ✅ Green - Allow
+- 🔴 Red - Deny
+- 🟡 Yellow - Watch/Log
+- 👤 Purple - Approval required
+- 🔗 Blue - Webhook
+
+### Footer
+
+```
+╠══════════════════════════════════════════════════════════════╣
+║  1,247 total │ 1,201 allow │ 12 deny │ 34 watch             ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+## Interactive features
+
+### Keyboard shortcuts
+
+- `q` - Quit
+- `↑/↓` - Scroll through events
+- `a` - Approve highlighted request (if pending)
+- `d` - Deny highlighted request (if pending)
+- `f` - Toggle filters
+- `r` - Refresh
+
+### Approval flow
+
+When `rampart serve` is running with interactive approvals enabled:
+
+1. **Pending request appears** - Highlighted in purple
+2. **Select with arrow keys**
+3. **Press `a` to approve** or `d` to deny
+4. **Confirmation shown** - Event updated in real-time
+
+## Auto-discovery
+
+Watch auto-discovers:
+
+- **Audit directory** - `~/.rampart/audit`
+- **Serve URL** - `http://localhost:9090` or `$RAMPART_SERVE_URL`
+- **Token** - `~/.rampart/token` or `$RAMPART_TOKEN`
+
+No configuration needed for standard setups.
+
+## Filtering examples
+
+```bash
+# Show only blocked commands
+rampart watch --decision deny
+
+# Show only file reads
+rampart watch --tool read
+
+# Show claude-code denies
+rampart watch --agent claude-code --decision deny
+
+# Show approvals only
+rampart watch --decision ask
+```
+
+## Event details
+
+Each line shows:
+
+1. **Icon** - Decision type (✅/🔴/🟡/👤)
+2. **Time** - HH:MM:SS format
+3. **Tool** - Tool name (exec, read, write, fetch)
+4. **Command/Path** - Truncated to fit
+5. **Policy** - Matched policy name in brackets
+
+## Troubleshooting
+
+### No events appearing
+
+**Check audit directory:**
+```bash
+ls -la ~/.rampart/audit/
+```
+
+**Verify serve is running:**
+```bash
+curl http://localhost:9090/healthz
+```
+
+**Test with explicit path:**
+```bash
+rampart watch --audit-dir ~/.rampart/audit
+```
+
+### Approvals not working
+
+**Check serve URL:**
+```bash
+rampart watch --serve-url http://localhost:9090
+```
+
+**Verify token:**
+```bash
+cat ~/.rampart/token
+rampart watch --serve-token $(cat ~/.rampart/token)
+```
+
+### Colors not showing
+
+**Force color:**
+```bash
+export TERM=xterm-256color
+rampart watch
+```
+
+## Exit
+
+Press `q` or `Ctrl+C` to exit.
+
+## See also
+
+- [rampart log](/cli/serve#log) - Pretty-print audit events
+- [rampart audit](/cli/audit) - Audit trail commands
+- [rampart pending](/cli/approve-deny) - CLI approval management
+- [Dashboard](/concepts/dashboard) - Web UI alternative

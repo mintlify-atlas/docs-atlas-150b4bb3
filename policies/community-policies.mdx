@@ -1,0 +1,289 @@
+---
+title: Community Policies
+description: Browse, install, and sync community-contributed policies
+---
+
+Rampart supports community-contributed policies — pre-built rulesets for common frameworks, tools, and workflows.
+
+## Policy Registry
+
+Browse available policies:
+
+```bash
+rampart policy list
+```
+
+Output:
+
+```
+Community Policies
+
+Name                  Description                                  Author
+--------------------------------------------------------------------------------
+research-agent        Research-focused allowlist (web search, read-only)  @peg
+mcp-server            MCP server safety rules (block destructive tools)   @peg
+kubernetes-ops        Kubernetes operator policy (ask for applies/deletes) @community
+terraform-strict      Terraform strict mode (require approval for all)     @community
+docker-security       Docker security baseline (no privileged, limit mounts) @community
+```
+
+## Installing Policies
+
+```bash
+# Install a policy from the registry
+rampart policy fetch research-agent
+
+# Installs to ~/.rampart/policies/research-agent.yaml
+# Automatically loaded alongside your other policies
+```
+
+Verify:
+
+```bash
+rampart doctor
+# Output includes:
+#   ✓ Policy: research-agent.yaml (8 rules)
+```
+
+## Removing Policies
+
+```bash
+rampart policy remove research-agent
+# Deletes ~/.rampart/policies/research-agent.yaml
+```
+
+## Example: research-agent Policy
+
+The `research-agent` policy is designed for AI agents doing research tasks — web search, reading documentation, summarizing content.
+
+```yaml
+# ~/.rampart/policies/research-agent.yaml
+version: "1"
+default_action: deny
+
+policies:
+  - name: allow-read-only
+    priority: 10
+    match:
+      tool: ["read"]
+    rules:
+      - action: allow
+        when:
+          path_matches:
+            - "**/*.md"
+            - "**/*.txt"
+            - "**/*.pdf"
+            - "**/*.html"
+        message: "Read-only access to documentation"
+
+  - name: allow-safe-exec
+    priority: 10
+    match:
+      tool: ["exec"]
+    rules:
+      - action: allow
+        when:
+          command_matches:
+            - "cat *"
+            - "head *"
+            - "tail *"
+            - "grep *"
+            - "ls *"
+            - "find *"
+        message: "Safe read-only commands"
+
+  - name: allow-web-search
+    priority: 10
+    match:
+      tool: ["fetch", "web_search"]
+    rules:
+      - action: allow
+        when:
+          domain_matches:
+            - "*.wikipedia.org"
+            - "*.github.com"
+            - "*.stackoverflow.com"
+            - "*.arxiv.org"
+            - "*.docs.rs"
+        message: "Research domain allowlist"
+
+  - name: block-writes
+    priority: 1
+    match:
+      tool: ["write", "edit"]
+    rules:
+      - action: deny
+        message: "Research agents are read-only"
+
+  - name: block-credentials
+    priority: 1
+    match:
+      tool: ["read"]
+    rules:
+      - action: deny
+        when:
+          path_matches:
+            - "**/.ssh/id_*"
+            - "**/.aws/credentials"
+            - "**/.env"
+        message: "Credential access blocked"
+```
+
+Install and use:
+
+```bash
+rampart policy fetch research-agent
+rampart wrap -- my-research-agent
+```
+
+## Example: mcp-server Policy
+
+The `mcp-server` policy adds safety rules for MCP tool calls.
+
+```yaml
+# ~/.rampart/policies/mcp-server.yaml
+version: "1"
+default_action: allow
+
+policies:
+  - name: block-mcp-destructive
+    match:
+      tool: ["mcp-destructive"]
+    rules:
+      - action: deny
+        message: "Destructive MCP operation blocked (delete/destroy/remove/drop)"
+
+  - name: log-mcp-dangerous
+    match:
+      tool: ["mcp-dangerous"]
+    rules:
+      - action: watch
+        message: "Dangerous MCP operation logged (stop/restart/execute/modify)"
+```
+
+Rampart auto-classifies MCP tools based on their names:
+- `mcp-destructive`: Tools containing `delete`, `destroy`, `remove`, `drop`
+- `mcp-dangerous`: Tools containing `stop`, `restart`, `execute`, `modify`
+
+Install:
+
+```bash
+rampart policy fetch mcp-server
+rampart mcp -- npx @modelcontextprotocol/server-filesystem .
+```
+
+## Team Policy Sync
+
+Sync policies from a git repository. This is useful for teams that want to share policies without manual distribution.
+
+### One-Shot Sync
+
+```bash
+# Fetch policies from a git repo
+rampart policy sync https://github.com/your-org/rampart-policies.git
+
+# Clones to ~/.rampart/synced-policies/
+# Symlinks YAML files into ~/.rampart/policies/
+```
+
+### Continuous Sync
+
+Run in the background and poll for updates:
+
+```bash
+# Start sync in foreground (5m interval by default)
+rampart policy sync https://github.com/your-org/rampart-policies.git --watch
+
+# Check status
+rampart policy sync status
+# Output:
+#   Syncing from: https://github.com/your-org/rampart-policies.git
+#   Last update: 2m ago
+#   Policies: 4 active
+
+# Stop sync
+rampart policy sync stop
+```
+
+### Example Team Repo
+
+```
+rampart-policies/
+├── README.md
+├── production.yaml    # Strict rules for prod repos
+├── staging.yaml       # Relaxed rules for staging
+└── research.yaml      # Read-only for research agents
+```
+
+All `.yaml` files in the repo root are loaded.
+
+### Security Notes
+
+1. **HTTPS only** — `rampart policy sync` only accepts `https://` URLs (no SSH git URLs)
+2. **SHA-256 verification** — policies are checksummed on fetch
+3. **Deny-wins** — synced policies can't weaken your global policy
+4. **Disable with env var** — `RAMPART_NO_SYNC_POLICY=1` to skip synced policies
+
+## Creating Community Policies
+
+Want to contribute a policy to the registry?
+
+1. **Write the policy**
+
+   ```yaml
+   # my-policy.yaml
+   version: "1"
+   default_action: allow
+   
+   policies:
+     - name: my-custom-rule
+       match:
+         tool: ["exec"]
+       rules:
+         - action: deny
+           when:
+             command_matches: ["dangerous-command *"]
+           message: "Blocked by my policy"
+   ```
+
+2. **Test it**
+
+   ```bash
+   rampart policy lint my-policy.yaml
+   rampart bench --config my-policy.yaml
+   ```
+
+3. **Submit to the registry**
+
+   Open a PR to [peg/rampart-policies](https://github.com/peg/rampart-policies) with:
+   - Policy YAML file
+   - README describing the use case
+   - Test suite (JSON format)
+
+## Policy Precedence with Community Policies
+
+When community policies are loaded:
+
+1. **Global policies** (`~/.rampart/policies/*.yaml`) load first
+2. **Community/synced policies** load next
+3. **Project policies** (`.rampart/policy.yaml`) load last
+4. **Deny always wins** — if any policy denies, the action is denied
+
+Example:
+
+```bash
+# Active policies:
+#   1. standard.yaml (global)
+#   2. research-agent.yaml (community)
+#   3. .rampart/policy.yaml (project)
+#
+# If research-agent.yaml denies writes and project policy allows them,
+# the deny wins.
+```
+
+## See Also
+
+- [Writing Policies](/policies/writing-policies) — Full YAML schema reference
+- [Profiles](/policies/profiles) — Built-in policy presets
+- [Project Policies](/policies/project-policies) — Team-shared repo-specific rules
+- [Testing Policies](/policies/testing-policies) — Validate with `rampart test` and `rampart bench`

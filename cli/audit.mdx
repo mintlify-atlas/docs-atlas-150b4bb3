@@ -1,0 +1,319 @@
+---
+title: rampart audit
+description: Audit trail inspection and verification
+---
+
+Inspect, verify, and search the hash-chained audit trail.
+
+## Usage
+
+```bash
+rampart audit <subcommand> [flags]
+```
+
+## Subcommands
+
+### tail
+
+```bash
+rampart audit tail [flags]
+```
+
+Show recent audit events. Like `tail -f` for the audit trail.
+
+**Flags:**
+
+<ParamField path="--audit-dir" type="string" default="~/.rampart/audit">
+  Directory containing audit JSONL files
+</ParamField>
+
+<ParamField path="--lines" type="integer" default="20">
+  Number of events to print
+</ParamField>
+
+<ParamField path="--follow" type="boolean" default="false">
+  Follow new events (like `tail -f`)
+</ParamField>
+
+<ParamField path="--no-color" type="boolean" default="false">
+  Disable color output
+</ParamField>
+
+**Examples:**
+```bash
+# Show last 20 events
+rampart audit tail
+
+# Show last 50 events
+rampart audit tail --lines 50
+
+# Follow new events
+rampart audit tail --follow
+
+# Custom audit directory
+rampart audit tail --audit-dir ./audit
+```
+
+**Output:**
+```
+✅ 14:23:01 exec  "npm test"                          [allow-dev]
+✅ 14:23:03 read  ~/project/src/main.go                [default]
+🔴 14:23:05 exec  "rm -rf /tmp/*"                      [block-destructive]
+🟡 14:23:08 exec  "curl https://api.example.com"       [log-network]
+👤 14:23:10 exec  "kubectl apply -f prod.yaml"         [require-approval]
+```
+
+### verify
+
+```bash
+rampart audit verify [flags]
+```
+
+Verify hash-chain integrity. Detects tampering or corruption.
+
+**Flags:**
+
+<ParamField path="--audit-dir" type="string" default="~/.rampart/audit">
+  Directory containing audit JSONL files
+</ParamField>
+
+**Examples:**
+```bash
+# Verify all files
+rampart audit verify
+
+# Verify specific directory
+rampart audit verify --audit-dir /var/lib/rampart/audit
+```
+
+**Output (success):**
+```
+✓ Chain verified: 1,247 events across 7 files, no tampering detected
+```
+
+**Output (failure):**
+```
+audit: CHAIN BROKEN at event 01HGW1... in file audit-hook-2026-03-03.jsonl: hash verification failed
+```
+
+**How it works:**
+
+Each audit event includes:
+- `hash` - SHA-256 hash of the event (excluding prev_hash)
+- `prev_hash` - Hash of the previous event
+
+Tampering with any event breaks the chain:
+1. Modified event's hash won't match
+2. Next event's prev_hash won't match modified event's hash
+
+### stats
+
+```bash
+rampart audit stats [flags]
+```
+
+Show summary statistics (decision breakdown, top policies, agents).
+
+**Flags:**
+
+<ParamField path="--audit-dir" type="string" default="~/.rampart/audit">
+  Directory containing audit JSONL files
+</ParamField>
+
+<ParamField path="--since" type="string">
+  Only include events within duration (e.g. `24h`, `7d`, `1h30m`)
+</ParamField>
+
+<ParamField path="--no-color" type="boolean" default="false">
+  Disable color output
+</ParamField>
+
+**Examples:**
+```bash
+# All-time stats
+rampart audit stats
+
+# Last 24 hours
+rampart audit stats --since 24h
+
+# Last 7 days
+rampart audit stats --since 7d
+```
+
+**Output:**
+```
+Audit Statistics (last 24h)
+
+Decisions:
+  ✅ Allow:    1,201 (96.3%)
+  🔴 Deny:        12 (1.0%)
+  🟡 Watch:       34 (2.7%)
+  👤 Approval:     0 (0.0%)
+  Total:     1,247
+
+Top Policies:
+  allow-dev              847 (67.9%)
+  default                321 (25.7%)
+  block-destructive       12 (1.0%)
+
+Top Agents:
+  claude-code          1,103 (88.5%)
+  wrapped                144 (11.5%)
+
+Top Tools:
+  exec                 1,001 (80.3%)
+  read                   198 (15.9%)
+  write                   48 (3.8%)
+```
+
+### search
+
+```bash
+rampart audit search <query> [flags]
+```
+
+Search audit events by command, path, or message.
+
+**Flags:**
+
+<ParamField path="--audit-dir" type="string" default="~/.rampart/audit">
+  Directory containing audit JSONL files
+</ParamField>
+
+<ParamField path="--tool" type="string">
+  Filter by tool name
+</ParamField>
+
+<ParamField path="--agent" type="string">
+  Filter by agent name
+</ParamField>
+
+<ParamField path="--decision" type="string">
+  Filter by decision: `allow`, `deny`, `log`
+</ParamField>
+
+<ParamField path="--no-color" type="boolean" default="false">
+  Disable color output
+</ParamField>
+
+**Examples:**
+```bash
+# Search for npm commands
+rampart audit search "npm install"
+
+# Search denies only
+rampart audit search --decision deny "rm"
+
+# Search by tool and agent
+rampart audit search --tool exec --agent claude-code "git"
+
+# Search file reads
+rampart audit search --tool read ".env"
+```
+
+**Output:**
+```
+✅ 14:23:01 exec  "npm install lodash"     [allow-dev]
+✅ 14:25:32 exec  "npm test"               [allow-dev]
+✅ 15:12:08 exec  "npm run build"          [allow-dev]
+
+Found 3 matching events
+```
+
+### replay
+
+```bash
+rampart audit replay [flags]
+```
+
+Replay audit events with original timing. Useful for demonstrations or analysis.
+
+**Flags:**
+
+<ParamField path="--audit-dir" type="string" default="~/.rampart/audit">
+  Directory containing audit JSONL files
+</ParamField>
+
+<ParamField path="--speed" type="float" default="1">
+  Replay speed multiplier. `0` = no delay, `2` = 2x speed, `0.5` = half speed
+</ParamField>
+
+<ParamField path="--no-color" type="boolean" default="false">
+  Disable color output
+</ParamField>
+
+**Examples:**
+```bash
+# Replay at original speed
+rampart audit replay
+
+# Replay at 2x speed
+rampart audit replay --speed 2
+
+# Replay with no delay
+rampart audit replay --speed 0
+```
+
+**Output:**
+```
+[1/1247] ✅ 14:23:01 exec  "npm test"  [allow-dev]
+[2/1247] ✅ 14:23:03 read  ~/project/src/main.go  [default]
+[3/1247] 🔴 14:23:05 exec  "rm -rf /tmp/*"  [block-destructive]
+...
+```
+
+## Audit file format
+
+Audit files are JSONL (one JSON object per line):
+
+```json
+{
+  "id": "01HGW1ABCD1234567890ABCDEF",
+  "timestamp": "2026-03-03T14:23:01.123456Z",
+  "agent": "claude-code",
+  "session": "myapp/main",
+  "tool": "exec",
+  "request": {"command": "npm test"},
+  "decision": {
+    "action": "allow",
+    "matched_policies": ["allow-dev"],
+    "message": "Development tool allowed"
+  },
+  "hash": "a7f3c2e8b5d9f1a4c6e7d8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9",
+  "prev_hash": "b6e2d1c7a4e8f0a3b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7"
+}
+```
+
+**Daily files:**
+- `audit-hook-2026-03-03.jsonl` - Events from 2026-03-03
+- `audit-hook-2026-03-04.jsonl` - Events from 2026-03-04
+
+## Hash chain verification
+
+**Chain structure:**
+```
+Event 1: hash=H1, prev_hash=""
+Event 2: hash=H2, prev_hash=H1
+Event 3: hash=H3, prev_hash=H2
+```
+
+**Verification:**
+1. First event: `prev_hash` must be empty
+2. All other events: `prev_hash` must match previous event's `hash`
+3. Each event: `hash` must match SHA-256 of event (excluding `prev_hash`)
+
+**Tamper detection:**
+- Modify any field → hash won't match
+- Delete an event → next event's `prev_hash` won't match
+- Insert an event → `prev_hash` chain breaks
+
+## Exit codes
+
+- `0` - Success
+- `1` - Verification failed or no events found
+
+## See also
+
+- [rampart watch](/cli/watch) - Live event stream
+- [rampart log](/cli/serve#log) - Pretty-print recent events
+- [Audit trail](/concepts/audit) - Audit concepts

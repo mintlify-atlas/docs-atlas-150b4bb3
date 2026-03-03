@@ -1,0 +1,302 @@
+---
+title: rampart test
+description: Test commands and policies
+---
+
+Dry-run tool calls through the policy engine and display results. Can test single commands or run full test suites.
+
+## Usage
+
+```bash
+rampart test [command-or-path | test-file.yaml] [flags]
+```
+
+## Modes
+
+### Single command test
+
+Test a single command or file path:
+
+```bash
+# Test exec command (default)
+rampart test "rm -rf /"
+
+# Test file read
+rampart test --tool read "/etc/shadow"
+
+# Test file write
+rampart test --tool write "/tmp/test.txt"
+```
+
+### Test suite
+
+Run a YAML test suite:
+
+```bash
+# Run tests from file
+rampart test tests.yaml
+
+# Auto-discover rampart-tests.yaml
+rampart test
+```
+
+## Flags
+
+<ParamField path="--tool" type="string" default="exec">
+  Tool type for single command tests: `exec`, `read`, `write`
+</ParamField>
+
+<ParamField path="--no-color" type="boolean" default="false">
+  Disable color output
+</ParamField>
+
+<ParamField path="--verbose" type="boolean" default="false">
+  Show match details for each test case
+</ParamField>
+
+<ParamField path="--run" type="string">
+  Run only tests matching glob pattern
+</ParamField>
+
+<ParamField path="--json" type="boolean" default="false">
+  Output results as JSON
+</ParamField>
+
+## Examples
+
+### Test commands
+
+```bash
+# Test dangerous command
+rampart test "rm -rf /"
+
+# Test credential access
+rampart test --tool read "~/.ssh/id_rsa"
+
+# Test network request
+rampart test --tool fetch "https://webhook.site"
+
+# JSON output for scripting
+rampart test --json "curl evil.com"
+```
+
+### Test suites
+
+```bash
+# Run all tests
+rampart test tests.yaml
+
+# Run specific tests
+rampart test --run "blocks*" tests.yaml
+
+# Verbose output
+rampart test --verbose tests.yaml
+
+# JSON output
+rampart test --json tests.yaml
+```
+
+## Output
+
+### Single command (allow)
+
+```
+✅ ALLOW — Default policy allows this command
+   Policy: (default)
+   Eval: 4µs
+```
+
+### Single command (deny)
+
+```
+🛡️ DENY — Destructive command blocked
+   Policy: block-destructive
+   Eval: 8µs
+
+   💡 To allow this:
+      rampart allow "rm -rf *"
+```
+
+### Single command (approval)
+
+```
+👤 APPROVAL — Production deployment requires approval
+   Policy: production-deploys
+   Eval: 6µs
+```
+
+### Test suite
+
+```
+  ✅ allows git commands
+  ✅ allows npm install
+  ❌ blocks rm -rf / — expected deny, got allow
+  ✅ blocks credential access
+  ⚠️ parse error — invalid YAML
+
+[32m4 passed[0m, [31m1 failed[0m, 1 error(s) (6 total)
+```
+
+### JSON output (single command)
+
+```json
+{
+  "command": "rm -rf /",
+  "action": "deny",
+  "message": "Destructive command blocked",
+  "matched_policies": ["block-destructive"],
+  "policy_scope": "global"
+}
+```
+
+### JSON output (test suite)
+
+```json
+{
+  "passed": 4,
+  "failed": 1,
+  "errors": 0,
+  "total": 5,
+  "tests": [
+    {
+      "name": "allows git commands",
+      "passed": true
+    },
+    {
+      "name": "blocks rm -rf /",
+      "passed": false,
+      "expected": "deny",
+      "got": "allow",
+      "message": "Default policy allows this command"
+    }
+  ]
+}
+```
+
+## Test suite format
+
+Create `rampart-tests.yaml` or `tests.yaml`:
+
+```yaml
+version: "1"
+policy: "~/.rampart/policies/standard.yaml"  # optional
+
+tests:
+  - name: "allows git commands"
+    tool: exec
+    params:
+      command: "git status"
+    expect: allow
+
+  - name: "blocks destructive commands"
+    tool: exec
+    params:
+      command: "rm -rf /"
+    expect: deny
+
+  - name: "blocks credential access"
+    tool: read
+    params:
+      path: "~/.ssh/id_rsa"
+    expect: deny
+
+  - name: "requires approval for prod deploys"
+    tool: exec
+    params:
+      command: "kubectl apply -f prod.yaml"
+    expect: ask
+```
+
+**Inline tests** (in policy file):
+
+```yaml
+version: "1"
+default_action: allow
+
+policies:
+  - name: block-destructive
+    # ... policy rules ...
+
+tests:
+  - name: "blocks rm -rf"
+    tool: exec
+    params:
+      command: "rm -rf /"
+    expect: deny
+```
+
+## Auto-discovery
+
+When called with no arguments, test looks for:
+
+1. `rampart-tests.yaml` in current directory
+2. `rampart.yaml` (inline tests)
+
+```bash
+# Auto-discover and run
+rampart test
+```
+
+## Policy resolution
+
+Policy file is resolved in this order:
+
+1. `--config` flag (global flag)
+2. `policy:` field in test file
+3. `~/.rampart/policies/standard.yaml`
+4. Embedded standard policy
+
+## Filtering tests
+
+Use `--run` with glob patterns:
+
+```bash
+# Run tests starting with "blocks"
+rampart test --run "blocks*" tests.yaml
+
+# Run tests containing "credential"
+rampart test --run "*credential*" tests.yaml
+
+# Run specific test
+rampart test --run "blocks rm -rf" tests.yaml
+```
+
+## Exit codes
+
+- `0` - All tests passed (or single command allowed)
+- `1` - Tests failed or single command denied
+
+## CI integration
+
+```bash
+#!/bin/bash
+# Run policy tests in CI
+rampart test --json tests.yaml > results.json
+if [ $? -ne 0 ]; then
+  echo "Policy tests failed"
+  cat results.json
+  exit 1
+fi
+```
+
+## Verbose mode
+
+Show detailed match information:
+
+```bash
+rampart test --verbose tests.yaml
+```
+
+**Output:**
+```
+  ✅ blocks rm -rf /
+       message: Destructive command blocked
+       matched: block-destructive
+       eval:    8µs
+```
+
+## See also
+
+- [rampart policy explain](/cli/policy#explain) - Trace policy evaluation
+- [rampart bench](/cli/policy#bench) - Benchmark policy coverage
+- [Writing tests](/guides/testing-policies) - Test authoring guide

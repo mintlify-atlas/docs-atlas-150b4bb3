@@ -1,0 +1,212 @@
+---
+title: rampart quickstart
+description: One-shot setup for Rampart protection
+---
+
+Auto-detects your AI coding environment, installs the Rampart background service, wires up hooks, and runs a health check.
+
+## Usage
+
+```bash
+rampart quickstart
+rampart quickstart [flags]
+```
+
+## What it does
+
+1. **Detects environment** - Auto-discovers Claude Code, Cline, or OpenClaw
+2. **Installs service** - Runs `rampart serve install` (systemd/launchd)
+3. **Configures hooks** - Runs `rampart setup <agent>` for your environment
+4. **Initializes policy** - Creates `~/.rampart/policies/standard.yaml` if missing
+5. **Health check** - Runs `rampart doctor` to verify everything works
+
+## Flags
+
+<ParamField path="--env" type="string">
+  Force specific environment: `claude-code`, `cline`, `openclaw`, or `none`
+</ParamField>
+
+<ParamField path="--skip-doctor" type="boolean" default="false">
+  Skip final health check
+</ParamField>
+
+<ParamField path="--yes" type="boolean" default="false">
+  Non-interactive mode. For OpenClaw, also enables `--patch-tools` for full file coverage. Safe to pass for any agent.
+</ParamField>
+
+## Examples
+
+### Auto-detect and setup
+
+```bash
+rampart quickstart
+```
+
+**Output:**
+```
+◆ Rampart quickstart
+
+  ✓  Detected environment: claude-code
+
+  Installing Rampart service...
+  ✓  Service installed and started
+
+  Configuring hooks for claude-code...
+  ✓  Hooks configured
+
+  ✓  Policy initialized with standard profile
+
+  Running health check...
+
+🩺 Rampart Doctor
+
+✓ Version: v0.7.0 (go1.24.0)
+✓ PATH: rampart found in PATH
+✓ Token: token found in ~/.rampart/token
+✓ Policies: 3 policy files found
+✓ Hooks: Claude Code hooks installed
+✓ Audit: directory exists and is writable
+✓ Server: running on http://localhost:9090
+✓ System: linux/amd64
+
+No issues found.
+
+◆ You're protected.
+
+  Dashboard: http://localhost:9090/dashboard/
+  Token:     rampart_a7f3c2...  (full token in ~/.rampart/token)
+
+  Tip: export RAMPART_SESSION=my-project to tag audit events with a project name.
+  Docs: https://docs.rampart.sh
+```
+
+### Force specific environment
+
+```bash
+# Skip auto-detection
+rampart quickstart --env claude-code
+
+# Setup for Cline explicitly
+rampart quickstart --env cline
+
+# Full OpenClaw protection (non-interactive)
+rampart quickstart --env openclaw --yes
+```
+
+### CI/automated setups
+
+```bash
+# Non-interactive mode
+rampart quickstart --yes --skip-doctor
+```
+
+## Environment detection
+
+Quickstart auto-detects your environment in this order:
+
+1. **OpenClaw** - `OPENCLAW_SERVICE_MARKER=openclaw` env var
+2. **Cline** - `CLINE_ACTIVE` or `CLINE_SESSION` env vars, or VS Code extensions
+3. **Claude Code** - `~/.claude/settings.json` exists or `claude` binary in PATH
+
+If no environment is detected, quickstart prints a warning and sets up the service without hooks.
+
+## What gets installed
+
+### Claude Code
+
+- Service: `rampart serve` (systemd/launchd)
+- Hooks: `~/.claude/settings.json` (PreToolUse, PostToolUseFailure)
+- Policy: `~/.rampart/policies/standard.yaml`
+- Token: `~/.rampart/token`
+
+### Cline
+
+- Service: `rampart serve` (systemd/launchd)
+- Hooks: `~/.config/Cline/settings.json`
+- Policy: `~/.rampart/policies/standard.yaml`
+- Token: `~/.rampart/token`
+
+### OpenClaw
+
+- Service: `rampart-proxy.service` (systemd) or `com.rampart.proxy.plist` (launchd)
+- Shim: `~/.local/bin/rampart-shim`
+- Policy: `~/.rampart/policies/standard.yaml`
+- Token: embedded in service config
+- File tools: patched if `--yes` is passed
+
+## After quickstart
+
+### Verify installation
+
+```bash
+# Check status
+rampart status
+
+# Test a command
+rampart test "rm -rf /"
+
+# Watch live events
+rampart watch
+```
+
+### View dashboard
+
+Open http://localhost:9090/dashboard/ in your browser.
+
+### Tag sessions
+
+```bash
+# Add to your shell profile
+export RAMPART_SESSION=my-project
+
+# Or set per-command
+RAMPART_SESSION=my-project claude
+```
+
+## Troubleshooting
+
+### Service fails to start
+
+**Check logs:**
+```bash
+# Linux
+journalctl --user -u rampart -n 50
+
+# macOS
+tail -f ~/.rampart/rampart-proxy.log
+```
+
+**Fix:**
+```bash
+# Re-install service
+rampart serve install --force
+```
+
+### Hooks not detected
+
+**Force environment:**
+```bash
+rampart quickstart --env claude-code
+```
+
+### Already installed
+
+Quickstart is safe to run multiple times. It skips steps that are already complete:
+
+```bash
+rampart quickstart
+# Output: ✓ Service already installed and running
+#         ✓ Hooks already configured (pass --force to reconfigure)
+```
+
+## Exit codes
+
+- `0` - Setup successful
+- `1` - Setup failed (check error message)
+
+## See also
+
+- [rampart setup](/cli/setup) - Manual agent setup
+- [rampart serve](/cli/serve) - Service management
+- [rampart doctor](/cli/doctor) - Health diagnostics
+- [rampart init](/cli/policy#init) - Policy initialization

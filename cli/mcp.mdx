@@ -1,0 +1,407 @@
+---
+title: rampart mcp
+description: MCP server proxy with policy enforcement
+---
+
+Proxy between MCP clients and servers, evaluating every `tools/call` against your policies.
+
+## Usage
+
+```bash
+rampart mcp -- <mcp-server-command> [args...]
+rampart mcp proxy -- <mcp-server-command> [args...]
+rampart mcp scan -- <mcp-server-command> [args...]
+```
+
+## Subcommands
+
+### proxy (default)
+
+```bash
+rampart mcp -- npx @modelcontextprotocol/server-filesystem /path
+```
+
+Proxies MCP stdio communication, evaluating tool calls before they reach the server.
+
+**Flags:**
+
+<ParamField path="--mode" type="string" default="enforce">
+  Mode: `enforce` (block denies) or `monitor` (log only)
+</ParamField>
+
+<ParamField path="--audit-dir" type="string" default="~/.rampart/audit">
+  Directory for audit logs
+</ParamField>
+
+<ParamField path="--filter-tools" type="boolean" default="false">
+  Filter denied tools from `tools/list` responses (clients won't see them)
+</ParamField>
+
+**Examples:**
+```bash
+# Protect filesystem server
+rampart mcp -- npx @modelcontextprotocol/server-filesystem .
+
+# Monitor mode
+rampart mcp --mode monitor -- npx @modelcontextprotocol/server-filesystem .
+
+# Filter denied tools from tool list
+rampart mcp --filter-tools -- npx @modelcontextprotocol/server-filesystem .
+```
+
+### scan
+
+```bash
+rampart mcp scan -- <mcp-server-command> [args...]
+```
+
+Scans an MCP server's tool list and generates a deny-by-default policy.
+
+**Examples:**
+```bash
+# Generate policy from filesystem server
+rampart mcp scan -- npx @modelcontextprotocol/server-filesystem .
+
+# Generate policy from custom server
+rampart mcp scan -- python my_mcp_server.py
+```
+
+**Output:**
+```yaml
+version: "1"
+default_action: deny
+
+policies:
+  - name: mcp-server-allowlist
+    match:
+      tool: ["mcp"]
+    rules:
+      # Allow safe read-only tools
+      - action: allow
+        when:
+          tool_name_matches: ["read_file", "list_directory"]
+        message: "Read-only MCP tool allowed"
+      
+      # Deny destructive tools
+      - action: deny
+        when:
+          tool_name_matches: ["write_file", "delete_file", "move_file"]
+        message: "Destructive MCP tool blocked"
+```
+
+## How it works
+
+### MCP proxy flow
+
+```
+MCP Client (Claude Desktop, etc.)
+    ↓ stdio
+  Rampart MCP Proxy
+    │
+    ├── Policy Engine — evaluate tools/call
+    │
+    └── MCP Server (filesystem, database, etc.)
+        ↓ stdio
+  Tool execution
+```
+
+**When a tool call arrives:**
+1. Proxy intercepts `tools/call` JSON-RPC request
+2. Extracts tool name and arguments
+3. Evaluates against policy
+4. If allowed: forwards to server
+5. If denied: returns JSON-RPC error, server never sees it
+
+### Integration with MCP clients
+
+Add `rampart mcp` to your MCP client config:
+
+**Claude Desktop:**
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "rampart",
+      "args": [
+        "mcp",
+        "--",
+        "npx",
+        "@modelcontextprotocol/server-filesystem",
+        "."
+      ]
+    }
+  }
+}
+```
+
+**Cline (VS Code):**
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "rampart",
+      "args": ["mcp", "--", "npx", "@modelcontextprotocol/server-filesystem", "."]
+    }
+  }
+}
+```
+
+## Policy rules for MCP tools
+
+Use `tool_name_matches` to match MCP tool names:
+
+```yaml
+policies:
+  - name: block-destructive-mcp-tools
+    match:
+      tool: ["mcp"]
+    rules:
+      - action: deny
+        when:
+          tool_name_matches:
+            - "*delete*"
+            - "*destroy*"
+            - "*remove*"
+            - "write_file"
+        message: "Destructive MCP tool blocked"
+```
+
+**Built-in MCP protection:**
+
+The standard policy includes:
+```yaml
+- action: deny
+  when:
+    tool_name_matches: ["*delete*", "*destroy*", "*remove*"]
+  message: "Destructive MCP tool blocked"
+```
+
+## Tool filtering
+
+Use `--filter-tools` to hide denied tools from clients:
+
+```bash
+rampart mcp --filter-tools -- npx @modelcontextprotocol/server-filesystem .
+```
+
+**Without filtering:**
+Client sees all tools, gets error when trying to call denied ones.
+
+**With filtering:**
+Client only sees allowed tools, denied tools are invisible.
+
+## Denied tool calls
+
+**JSON-RPC error response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 123,
+  "error": {
+    "code": -32000,
+    "message": "Rampart: Destructive MCP tool blocked"
+  }
+}
+```
+
+The MCP server never receives the request.
+
+## Scan and generate policy
+
+```bash
+# Scan filesystem server
+rampart mcp scan -- npx @modelcontextprotocol/server-filesystem .
+```
+
+**Output:**
+```
+Scanning MCP server tools...
+
+Found 5 tools:
+  - read_file
+  - write_file
+  - list_directory
+  - delete_file
+  - move_file
+
+Generated policy (deny-by-default):
+
+version: "1"
+default_action: deny
+
+policies:
+  - name: mcp-filesystem-allowlist
+    match:
+      tool: ["mcp"]
+    rules:
+      - action: allow
+        when:
+          tool_name_matches: ["read_file", "list_directory"]
+        message: "Read-only tools allowed"
+      
+      - action: deny
+        when:
+          tool_name_matches: ["write_file", "delete_file", "move_file"]
+        message: "Destructive tools blocked"
+
+Save to: ~/.rampart/policies/mcp-filesystem.yaml
+```
+
+**Review and customize:**
+```bash
+vim ~/.rampart/policies/mcp-filesystem.yaml
+```
+
+**Test:**
+```bash
+rampart test --tool mcp --config ~/.rampart/policies/mcp-filesystem.yaml
+```
+
+## Output
+
+### Startup
+
+```
+INFO mcp: proxy started
+INFO mcp: child process pid=12345
+```
+
+### During execution
+
+**Allowed:**
+```
+INFO mcp: tool_call tool=read_file decision=allow
+```
+
+**Denied:**
+```
+WARN mcp: tool_call tool=delete_file decision=deny message="Destructive MCP tool blocked"
+```
+
+### Shutdown
+
+```
+Rampart: 47 calls evaluated, 2 denied, 5 logged
+```
+
+## Audit trail
+
+MCP tool calls are logged to the same audit trail as other tools:
+
+```json
+{
+  "id": "01HGW1...",
+  "timestamp": "2026-03-03T14:23:01Z",
+  "tool": "mcp",
+  "request": {
+    "tool_name": "write_file",
+    "arguments": {"path": "/etc/passwd", "content": "..."}
+  },
+  "decision": {
+    "action": "deny",
+    "matched_policies": ["block-destructive-mcp-tools"],
+    "message": "Destructive MCP tool blocked"
+  }
+}
+```
+
+**View audit:**
+```bash
+rampart audit tail --tool mcp
+rampart audit stats --tool mcp
+```
+
+## Examples
+
+### Protect filesystem server
+
+```bash
+# Generate policy
+rampart mcp scan -- npx @modelcontextprotocol/server-filesystem . > ~/.rampart/policies/mcp-fs.yaml
+
+# Edit policy (allow specific paths)
+vim ~/.rampart/policies/mcp-fs.yaml
+
+# Run with policy
+rampart mcp --config ~/.rampart/policies/mcp-fs.yaml -- npx @modelcontextprotocol/server-filesystem .
+```
+
+### Monitor mode (learning)
+
+```bash
+# Log all tool calls without blocking
+rampart mcp --mode monitor -- npx @modelcontextprotocol/server-filesystem .
+
+# Review what was called
+rampart audit stats --tool mcp
+
+# Generate allowlist from audit
+rampart policy generate --from-audit ~/.rampart/audit --tool mcp
+```
+
+### Multiple MCP servers
+
+**Claude Desktop config:**
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "rampart",
+      "args": ["mcp", "--", "npx", "@modelcontextprotocol/server-filesystem", "."]
+    },
+    "database": {
+      "command": "rampart",
+      "args": ["mcp", "--", "python", "mcp_database_server.py"]
+    }
+  }
+}
+```
+
+Each server gets its own Rampart proxy instance.
+
+## Troubleshooting
+
+### MCP server fails to start
+
+**Check server command works without Rampart:**
+```bash
+npx @modelcontextprotocol/server-filesystem .
+```
+
+**Check PATH:**
+```bash
+which npx
+```
+
+### Tool calls not being blocked
+
+**Check policy:**
+```bash
+rampart policy lint
+rampart policy explain --tool mcp "write_file"
+```
+
+**Check audit:**
+```bash
+rampart audit tail --tool mcp
+```
+
+### Serve not running
+
+**MCP proxy needs rampart serve:**
+```bash
+rampart serve install
+curl http://localhost:9090/healthz
+```
+
+## Exit codes
+
+- `0` - MCP server exited cleanly
+- `1` - Proxy or server error
+- Other - MCP server's exit code
+
+## See also
+
+- [MCP Protocol](https://modelcontextprotocol.io/) - MCP specification
+- [rampart policy](/cli/policy) - Policy management
+- [MCP integration](/guides/mcp-integration) - Setup guide

@@ -1,0 +1,311 @@
+---
+title: rampart upgrade
+description: Upgrade Rampart to the latest or specified version
+---
+
+Downloads and installs the latest Rampart binary, refreshes built-in policies, and optionally restarts the serve process.
+
+## Usage
+
+```bash
+rampart upgrade [version] [flags]
+```
+
+## Flags
+
+<ParamField path="--yes" type="boolean" default="false">
+  Skip confirmation prompt (non-interactive mode)
+</ParamField>
+
+<ParamField path="--dry-run" type="boolean" default="false">
+  Show what would be upgraded without making changes
+</ParamField>
+
+<ParamField path="--no-policy-update" type="boolean" default="false">
+  Skip policy file refresh (only upgrade binary)
+</ParamField>
+
+## What it does
+
+1. **Checks latest version** - Queries GitHub releases API
+2. **Downloads binary** - Gets platform-specific archive (Linux, macOS, Windows)
+3. **Verifies checksum** - SHA256 verification against `checksums.txt`
+4. **Stops serve** - If running as systemd/launchd service or background process
+5. **Replaces binary** - Atomic replacement of current executable
+6. **Updates PATH copies** - Auto-fixes stale rampart binaries (converts to symlinks)
+7. **Restarts serve** - If it was running before upgrade
+8. **Refreshes policies** - Updates built-in policies (standard, paranoid, yolo, ci)
+
+## Examples
+
+### Upgrade to latest
+
+```bash
+rampart upgrade
+```
+
+**Output:**
+```
+Current version: v0.6.5
+Latest version:  v0.7.0
+
+Upgrade from v0.6.5 to v0.7.0? [y/N]: y
+
+Downloading v0.7.0... ✓
+Verifying SHA256... ✓
+Stopping rampart serve (pid 12345)... ✓
+Replacing /usr/local/bin/rampart... ✓
+Updating PATH copies... ✓
+Restarting rampart serve... ✓
+Refreshing built-in policies... ✓
+
+Upgrade complete!
+  Version: v0.7.0
+  Serve:   running on :9090
+```
+
+### Upgrade to specific version
+
+```bash
+rampart upgrade v0.6.8
+```
+
+### Non-interactive mode
+
+```bash
+rampart upgrade --yes
+```
+
+### Dry run
+
+```bash
+rampart upgrade --dry-run
+```
+
+**Output:**
+```
+Dry run:
+- would upgrade from v0.6.5 to v0.7.0
+- would download https://github.com/peg/rampart/releases/download/v0.7.0/rampart_0.7.0_linux_amd64.tar.gz
+- would verify SHA256 from checksums.txt
+- would stop rampart serve (pid 12345)
+- would atomically replace /usr/local/bin/rampart
+- would scan PATH and auto-fix stale rampart copies
+- would restart systemd service: rampart.service
+✓ dry run complete
+```
+
+### Skip policy update
+
+```bash
+rampart upgrade --no-policy-update
+```
+
+Upgrades binary only. Preserves all policies including built-ins.
+
+## Policy refresh
+
+Upgrade refreshes these built-in policies:
+
+- `standard.yaml`
+- `paranoid.yaml`
+- `yolo.yaml`
+- `ci.yaml`
+- `demo.yaml`
+
+**Your custom policies are never touched:**
+- `custom.yaml` - preserved
+- `community-*.yaml` - preserved
+- `.rampart/policy.yaml` - preserved (project policies)
+
+## Service restart
+
+Upgrade detects and restarts:
+
+**Systemd (Linux):**
+```bash
+systemctl --user restart rampart
+```
+
+**Launchd (macOS):**
+```bash
+launchctl stop com.rampart.serve
+launchctl start com.rampart.serve
+```
+
+**Background process:**
+```bash
+kill -TERM <pid>
+rampart serve --background
+```
+
+## PATH scanning
+
+Upgrade finds all `rampart` binaries in `$PATH`:
+
+```
+/usr/local/bin/rampart  ← main binary
+~/.local/bin/rampart     ← stale copy
+~/go/bin/rampart         ← stale copy
+```
+
+**Converts stale copies to symlinks:**
+```bash
+# Before
+~/.local/bin/rampart  (old v0.6.5)
+
+# After
+~/.local/bin/rampart -> /usr/local/bin/rampart  (v0.7.0)
+```
+
+This ensures all locations use the latest version.
+
+## Version detection
+
+**Latest version** - Queries:
+```
+https://api.github.com/repos/peg/rampart/releases/latest
+```
+
+**Specific version** - Validates format:
+```bash
+rampart upgrade v0.7.0   # valid
+rampart upgrade 0.7.0    # normalized to v0.7.0
+rampart upgrade latest   # resolves to latest tag
+```
+
+## Download URLs
+
+**Archive naming:**
+```
+rampart_{version}_{os}_{arch}.{ext}
+
+Examples:
+- rampart_0.7.0_linux_amd64.tar.gz
+- rampart_0.7.0_darwin_arm64.tar.gz
+- rampart_0.7.0_windows_amd64.zip
+```
+
+**Download location:**
+```
+https://github.com/peg/rampart/releases/download/{tag}/{archive}
+```
+
+**Checksum location:**
+```
+https://github.com/peg/rampart/releases/download/{tag}/checksums.txt
+```
+
+## Verification
+
+**SHA256 check:**
+1. Download `checksums.txt`
+2. Find line matching archive name
+3. Compute SHA256 of downloaded archive
+4. Compare hashes
+5. Abort if mismatch
+
+**Example checksums.txt:**
+```
+a7f3c2e8b5d9f1a4c6e7d8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9  rampart_0.7.0_linux_amd64.tar.gz
+b6e2d1c7a4e8f0a3b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8  rampart_0.7.0_darwin_arm64.tar.gz
+```
+
+## Atomic replacement
+
+**Process:**
+1. Extract new binary to temp file
+2. Set executable permission (0755)
+3. Atomic rename over old binary
+4. Old binary replaced in single operation
+
+No intermediate state where rampart is missing.
+
+## Migration warnings
+
+Upgrade detects breaking changes:
+
+**Example (v0.6.6+):**
+```
+⚠️  Migration notice: v0.6.6+ changes `require_approval` behavior
+
+  Old: require_approval blocks and waits for CLI approval
+  New: require_approval uses native ask prompts (Claude Code)
+       Falls back to dashboard for other agents
+
+Scanning policies for require_approval usage...
+Found 2 policies using require_approval:
+  - production-deploys (custom.yaml:12)
+  - dangerous-commands (custom.yaml:34)
+
+Update recommended:
+  Replace `action: require_approval` with:
+    action: ask
+    ask:
+      audit: true
+
+Continue upgrade? [y/N]:
+```
+
+## Troubleshooting
+
+### Download fails
+
+**Check network:**
+```bash
+curl -I https://api.github.com/repos/peg/rampart/releases/latest
+```
+
+**Use specific version:**
+```bash
+rampart upgrade v0.7.0
+```
+
+### Checksum mismatch
+
+**Corrupt download. Retry:**
+```bash
+rm /tmp/rampart-upgrade-*
+rampart upgrade
+```
+
+### Permission denied
+
+**Binary location requires sudo:**
+```bash
+sudo rampart upgrade
+```
+
+**Or install to user directory:**
+```bash
+mv /usr/local/bin/rampart ~/.local/bin/
+export PATH="$HOME/.local/bin:$PATH"
+rampart upgrade
+```
+
+### Serve doesn't restart
+
+**Manual restart:**
+```bash
+# Systemd
+systemctl --user restart rampart
+
+# Launchd
+launchctl stop com.rampart.serve
+launchctl start com.rampart.serve
+
+# Background
+rampart serve stop
+rampart serve --background
+```
+
+## Exit codes
+
+- `0` - Upgrade successful
+- `1` - Download, verification, or installation failed
+
+## See also
+
+- [rampart --version](/cli/overview#flags) - Check current version
+- [rampart doctor](/cli/doctor) - Verify installation
+- [Releases](https://github.com/peg/rampart/releases) - All versions

@@ -1,0 +1,271 @@
+---
+title: Security Recommendations
+description: Best practices for securing Rampart deployments and AI agents
+---
+
+Rampart's security model is built on separation of privileges and least-privilege principles. Follow these recommendations to maximize protection.
+
+## User Separation
+
+<Warning>
+Don't run your AI agent as root. If the agent runs as root, no user separation can protect policy files or audit logs — root can read everything.
+</Warning>
+
+### Why User Separation Matters
+
+If Rampart runs as the same user as your AI agent, the agent can:
+- Read audit logs (potentially containing credentials)
+- Modify policy files to weaken its own rules
+- Access the bearer token used for authentication
+
+A dedicated `rampart` user prevents all of these attacks.
+
+### Setting Up User Separation
+
+<Steps>
+  <Step title="Create a service account">
+    ```bash
+    sudo useradd -r -s /usr/sbin/nologin rampart
+    ```
+  </Step>
+
+  <Step title="Move config and audit to the new user">
+    ```bash
+    sudo mkdir -p /etc/rampart /var/lib/rampart/audit
+    sudo cp ~/.rampart/policies/*.yaml /etc/rampart/
+    sudo chown -R rampart:rampart /etc/rampart /var/lib/rampart
+    sudo chmod 700 /etc/rampart /var/lib/rampart/audit
+    ```
+  </Step>
+
+  <Step title="Update systemd service">
+    Edit your systemd service file to run as the rampart user:
+    ```bash
+    sudo systemctl edit rampart
+    ```
+
+    Add:
+    ```ini
+    [Service]
+    User=rampart
+    ExecStart=
+    ExecStart=/usr/local/bin/rampart serve --config /etc/rampart/standard.yaml --audit-dir /var/lib/rampart/audit
+    ```
+  </Step>
+
+  <Step title="Restart the service">
+    ```bash
+    sudo systemctl daemon-reload
+    sudo systemctl restart rampart
+    ```
+  </Step>
+</Steps>
+
+### How It Works
+
+The agent communicates with Rampart over HTTP on localhost — no file access needed. This means:
+
+- **Audit logs** are protected from agent tampering or credential harvesting
+- **Policy files** can't be modified by the agent to weaken its own rules
+- **The agent loses zero capability** — it still executes commands normally
+
+## Deployment Models
+
+| Setup | Agent reads audit? | Agent modifies policy? | Best for |
+|-------|-------------------|----------------------|----------|
+| Same user (default) | ✅ Yes | ✅ Yes | Development, testing |
+| Separate user | ❌ No | ❌ No | Production, unsupervised agents |
+| Separate user + SIEM | ❌ No | ❌ No | Enterprise, compliance |
+
+<Warning>
+**Prerequisite:** The agent must run as a non-root user. If the agent runs as root, user separation provides no protection.
+
+**Sudo caveat:** An agent with unrestricted `sudo` (`NOPASSWD: ALL`) can bypass user separation. Restrict sudo to specific commands your agent needs rather than granting blanket access.
+</Warning>
+
+## Run Agents as Unprivileged Users
+
+Run your agent framework (Claude Code, Cline, OpenClaw, etc.) as a standard user, not root:
+
+```bash
+# Bad
+sudo claude
+
+# Good
+claude
+```
+
+If you need elevated privileges for specific operations, use targeted `sudo` commands that Rampart can evaluate:
+
+```yaml
+# In your policy file
+policies:
+  - name: require-privileged-approval
+    match:
+      tool: ["exec"]
+    rules:
+      - action: ask
+        when:
+          command_matches:
+            - "sudo **"
+        message: "sudo requires approval"
+```
+
+## Protect Sensitive Files
+
+Rampart's standard policy blocks access to common credential locations:
+
+- SSH keys (`~/.ssh/id_*`, excluding `.pub`)
+- Cloud credentials (`~/.aws/credentials`, `~/.config/gcloud/`, etc.)
+- Token files (`.env`, `.netrc`, `.vault-token`)
+- System authentication (`/etc/shadow`, `/etc/sudoers`)
+- Browser profiles (saved passwords, cookies)
+
+Add custom patterns for your environment:
+
+```yaml
+policies:
+  - name: block-company-secrets
+    match:
+      tool: ["read"]
+    rules:
+      - action: deny
+        when:
+          path_matches:
+            - "**/company-secrets/**"
+            - "**/.ssh/deploy_key"
+        message: "Company credential access blocked"
+```
+
+## SIEM Integration for Production
+
+For production deployments, send audit events to an external SIEM:
+
+```bash
+# RFC 5424 syslog
+rampart serve --syslog localhost:514
+
+# Common Event Format (CEF)
+rampart serve --syslog localhost:514 --cef
+
+# CEF to file (when you don't have a syslog collector)
+rampart serve --cef
+```
+
+This creates an independent audit trail that the agent cannot modify. See the [SIEM integration guide](https://github.com/peg/rampart/blob/main/README.md#siem-integration) for details.
+
+## Webhook Notifications
+
+Get real-time alerts when Rampart blocks suspicious activity:
+
+```yaml
+version: "1"
+default_action: allow
+
+notify:
+  url: "https://discord.com/api/webhooks/your/webhook"
+  # Or Slack: "https://hooks.slack.com/services/your/webhook"
+  on: ["deny"]  # Notify on denied commands
+
+policies:
+  # ... your policies
+```
+
+Webhook notifications provide immediate visibility into agent behavior, separate from audit logs.
+
+## Project Policy Security
+
+<Warning>
+Set `RAMPART_NO_PROJECT_POLICY=1` when working in untrusted repos — you shouldn't let a cloned repo change your security posture.
+</Warning>
+
+Project-local `.rampart/policy.yaml` files are loaded automatically when present. A malicious repository could include a permissive project policy.
+
+**Mitigations:**
+
+1. **Deny-wins evaluation** — Project policies can only add restrictions, not weaken global policies
+2. **Environment variable** — `RAMPART_NO_PROJECT_POLICY=1` skips project policy loading
+3. **Visibility** — Project policy denials are prefixed with `[Project Policy]` in error messages
+
+## Token Security
+
+The bearer token for Rampart API authentication is stored in `~/.rampart/token` with `0600` permissions.
+
+**Best practices:**
+
+1. **Rotate tokens regularly:**
+   ```bash
+   rampart token rotate
+   ```
+
+2. **Store tokens in the service user's home directory** when using user separation:
+   ```bash
+   sudo -u rampart rampart token rotate
+   ```
+
+3. **Use native hooks when possible** — Claude Code and Cline don't require token files
+
+## Platform-Specific Considerations
+
+### macOS
+
+v0.4.4+ includes macOS-specific protections:
+
+- **Keychain access** — Blocks `security dump-keychain`, requires approval for password queries
+- **Gatekeeper bypass** — Blocks `spctl --master-disable`
+- **SIP tampering** — Blocks `csrutil disable`
+- **LaunchAgent persistence** — Blocks `launchctl load` for persistence
+
+### Windows
+
+<Warning>
+**No LD_PRELOAD on Windows** — `rampart preload` is not available. Use native hooks or wrap mode instead.
+
+**File permissions:** Windows doesn't enforce POSIX `chmod 0600`. Use Windows ACLs to harden token files and signing keys.
+</Warning>
+
+v0.6.6+ includes Windows-specific protections:
+
+- **Registry persistence** — Blocks Run key modifications
+- **Credential dumping** — Blocks SAM/SYSTEM/SECURITY registry access
+- **Download cradles** — Blocks `IEX (IWR ...)` and `certutil` abuse
+
+## Defense in Depth
+
+Rampart is a **seatbelt, not a roll cage**. It catches the vast majority of dangerous situations an AI agent will encounter — accidental or manipulated.
+
+For full isolation, use Rampart **in combination with**:
+
+- **Containers** — Docker, Podman, or LXC
+- **Virtual machines** — Isolate agent workloads
+- **Mandatory Access Control** — SELinux, AppArmor, or seccomp
+- **Network segmentation** — Restrict agent network access
+
+See the [Threat Model](/security/threat-model) for a complete discussion of what Rampart protects against.
+
+## Production Checklist
+
+<Check>
+- [ ] Agent runs as a non-root user
+- [ ] Rampart service runs as a separate user (`rampart` account)
+- [ ] Audit logs are in a protected directory (`/var/lib/rampart/audit`)
+- [ ] SIEM export is enabled (`--syslog` or `--cef`)
+- [ ] Webhook notifications are configured
+- [ ] Token is rotated and stored securely
+- [ ] `RAMPART_NO_PROJECT_POLICY=1` is set for CI/untrusted environments
+- [ ] Custom policies are added for your environment's sensitive files
+</Check>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="OWASP Coverage" icon="shield-check" href="/security/owasp-coverage">
+    See how Rampart maps to OWASP Top 10 for Agentic AI
+  </Card>
+  <Card title="Self-Modification Protection" icon="lock" href="/security/self-modification-protection">
+    Learn how Rampart prevents agents from modifying policies
+  </Card>
+  <Card title="Threat Model" icon="bug" href="/security/threat-model">
+    Understand what Rampart protects against and known limitations
+  </Card>
+</CardGroup>

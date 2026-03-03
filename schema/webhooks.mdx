@@ -1,0 +1,546 @@
+---
+title: Webhooks
+description: Webhook action configuration and notification setup for Rampart
+---
+
+# Webhooks
+
+Rampart supports two types of webhooks:
+
+1. **Action webhooks** - Delegate allow/deny decisions to external services
+2. **Notification webhooks** - Send alerts when policies trigger
+
+This page documents both use cases with examples and validation rules.
+
+## Action Webhooks
+
+Action webhooks delegate policy decisions to external HTTP endpoints. Use for LLM-based intent verification, Slack approval bots, or custom authorization logic.
+
+### Basic Configuration
+
+```yaml
+policies:
+  - name: verify-production
+    match:
+      tool: ["exec"]
+    rules:
+      - action: webhook
+        when:
+          command_matches: ['*production*']
+        webhook:
+          url: 'http://localhost:8090/verify'
+          timeout: 5s
+          fail_open: true
+```
+
+### Webhook Schema
+
+<ParamField path="webhook" type="object" required>
+  Webhook configuration object. Required when `action: webhook`.
+  
+  <Expandable title="Fields">
+    <ParamField path="webhook.url" type="string" required>
+      HTTP endpoint URL. Rampart sends POST requests with full tool call context.
+      
+      ```yaml
+      webhook:
+        url: "http://localhost:8090/verify"
+      ```
+      
+      <Tip>
+      Use localhost URLs for sidecar services like [rampart-verify](https://github.com/peg/rampart-verify).
+      </Tip>
+    </ParamField>
+    
+    <ParamField path="webhook.timeout" type="string" default="5s">
+      Request timeout. Format: `<number><unit>` where unit is `s` (seconds), `ms` (milliseconds), or `m` (minutes).
+      
+      ```yaml
+      webhook:
+        url: "http://localhost:8090/verify"
+        timeout: 10s
+      ```
+      
+      <Warning>
+      Keep timeouts under 10s to avoid blocking the agent. Use `fail_open: true` for longer operations.
+      </Warning>
+    </ParamField>
+    
+    <ParamField path="webhook.fail_open" type="boolean" default="true">
+      Behavior when webhook is unreachable or times out.
+      
+      - `true` - Allow tool call on error (recommended)
+      - `false` - Deny tool call on error (stricter, but webhook becomes single point of failure)
+      
+      ```yaml
+      webhook:
+        url: "http://localhost:8090/verify"
+        fail_open: false  # Deny if webhook fails
+      ```
+      
+      <Note>
+      `fail_open: true` prevents webhook downtime from blocking your agent. Set to `false` only for critical security checks.
+      </Note>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Request Format
+
+Rampart sends POST requests with this JSON payload:
+
+```json
+{
+  "tool": "exec",
+  "agent": "claude-code",
+  "session": "myapp/main",
+  "params": {
+    "command": "kubectl apply -f deployment.yaml"
+  },
+  "timestamp": "2026-03-03T14:23:05Z",
+  "policy_name": "verify-production",
+  "rule_index": 0
+}
+```
+
+#### Request Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | string | Tool type (`exec`, `read`, `write`, `fetch`, etc.) |
+| `agent` | string | Agent identity (e.g., `claude-code`, `mcp-client`) |
+| `session` | string | Session identifier (auto-detected as `repo/branch` from git) |
+| `params` | object | Tool-specific parameters (command, path, url, etc.) |
+| `timestamp` | string | ISO 8601 timestamp of the tool call |
+| `policy_name` | string | Name of the policy that triggered this webhook |
+| `rule_index` | integer | Zero-based index of the rule within the policy |
+
+#### Tool-Specific Params
+
+```json
+// exec tool
+{
+  "tool": "exec",
+  "params": {
+    "command": "rm -rf /tmp/build"
+  }
+}
+
+// read tool
+{
+  "tool": "read",
+  "params": {
+    "path": "/home/user/.env"
+  }
+}
+
+// write tool
+{
+  "tool": "write",
+  "params": {
+    "path": "/etc/hosts",
+    "content": "127.0.0.1 localhost"
+  }
+}
+
+// fetch tool
+{
+  "tool": "fetch",
+  "params": {
+    "url": "https://api.github.com/repos/peg/rampart"
+  }
+}
+```
+
+### Response Format
+
+Your webhook endpoint must return JSON with a `decision` field within the timeout period:
+
+<ParamField path="decision" type="string" required>
+  Allow or deny decision. Must be `"allow"` or `"deny"`.
+  
+  ```json
+  {
+    "decision": "allow"
+  }
+  ```
+</ParamField>
+
+<ParamField path="reason" type="string">
+  Optional explanation shown to the agent when denying.
+  
+  ```json
+  {
+    "decision": "deny",
+    "reason": "Command targets production environment without approval"
+  }
+  ```
+</ParamField>
+
+#### Response Examples
+
+```json
+// Allow the tool call
+{
+  "decision": "allow"
+}
+
+// Deny with reason
+{
+  "decision": "deny",
+  "reason": "LLM verification failed: command intent unclear"
+}
+
+// Deny with detailed reason
+{
+  "decision": "deny",
+  "reason": "Blocked by rampart-verify: Command 'rm -rf /var/lib/app' targets sensitive path outside project directory. Confidence: 0.95"
+}
+```
+
+### Error Handling
+
+| Error | Behavior with `fail_open: true` | Behavior with `fail_open: false` |
+|-------|--------------------------------|----------------------------------|
+| Connection refused | Allow | Deny |
+| Timeout | Allow | Deny |
+| HTTP 500 | Allow | Deny |
+| Invalid JSON | Allow | Deny |
+| Missing `decision` | Allow | Deny |
+| Invalid `decision` value | Allow | Deny |
+
+### Complete Example
+
+```yaml
+policies:
+  - name: llm-verify
+    match:
+      tool: ["exec"]
+    rules:
+      # Explicit denies (fast pattern matching)
+      - action: deny
+        when:
+          command_matches:
+            - "rm -rf /"
+            - "mkfs*"
+        message: "Destructive command blocked"
+      
+      # LLM verification for ambiguous commands
+      - action: webhook
+        when:
+          command_matches:
+            - "*production*"
+            - "*deploy*"
+            - "rm -rf *"
+        webhook:
+          url: "http://localhost:8090/verify"
+          timeout: 5s
+          fail_open: true
+        message: "Command requires intent verification"
+      
+      # Default allow
+      - action: allow
+        when:
+          default: true
+```
+
+## Notification Webhooks
+
+Notification webhooks send alerts to Slack, Discord, Microsoft Teams, or custom endpoints when policies trigger.
+
+### Basic Configuration
+
+```yaml
+version: "1"
+default_action: allow
+
+notify:
+  url: "https://discord.com/api/webhooks/your/webhook"
+  on: ["deny"]
+
+policies:
+  # ...
+```
+
+### Notify Schema
+
+<ParamField path="notify" type="object">
+  Top-level notification configuration. Optional.
+  
+  <Expandable title="Fields">
+    <ParamField path="notify.url" type="string" required>
+      Webhook URL to send notifications to. Required when `notify` is present.
+      
+      ```yaml
+      notify:
+        url: "https://discord.com/api/webhooks/123/abc"
+      ```
+    </ParamField>
+    
+    <ParamField path="notify.platform" type="string" default="auto">
+      Notification platform format. Auto-detected from URL by default.
+      
+      Options:
+      - `auto` - Auto-detect based on URL (recommended)
+      - `slack` - Slack webhook format (`hooks.slack.com`)
+      - `discord` - Discord webhook format (`discord.com/api/webhooks`)
+      - `teams` - Microsoft Teams format (`webhook.office.com`)
+      - `openclaw` - OpenClaw notification format (`openclaw.dev/ai/io`)
+      - `webhook` - Generic JSON webhook
+      
+      ```yaml
+      notify:
+        url: "https://hooks.slack.com/services/..."
+        platform: "slack"  # Optional, auto-detected
+      ```
+    </ParamField>
+    
+    <ParamField path="notify.on" type="array" required>
+      Event types that trigger notifications. At least one event type required.
+      
+      Options:
+      - `deny` - Tool call was blocked
+      - `watch` - Tool call was flagged for review (formerly `log`)
+      - `ask` - Tool call requires human approval
+      
+      ```yaml
+      notify:
+        url: "https://..."
+        on: ["deny", "ask"]
+      ```
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Notification Payload
+
+Rampart sends POST requests with this JSON payload:
+
+```json
+{
+  "timestamp": "2026-03-03T14:23:05Z",
+  "decision": "deny",
+  "tool": "exec",
+  "command": "rm -rf /tmp/*",
+  "policy": "block-destructive",
+  "message": "Destructive command blocked",
+  "agent": "claude-code",
+  "session": "myapp/main"
+}
+```
+
+#### Platform-Specific Formatting
+
+Rampart automatically formats payloads for each platform:
+
+**Slack:**
+```json
+{
+  "text": "🔴 Rampart blocked a command",
+  "blocks": [
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*Decision:* deny\n*Tool:* exec\n*Command:* `rm -rf /tmp/*`\n*Policy:* block-destructive\n*Agent:* claude-code\n*Session:* myapp/main"
+      }
+    }
+  ]
+}
+```
+
+**Discord:**
+```json
+{
+  "embeds": [
+    {
+      "title": "🔴 Rampart Policy Triggered",
+      "color": 15158332,
+      "fields": [
+        {"name": "Decision", "value": "deny", "inline": true},
+        {"name": "Tool", "value": "exec", "inline": true},
+        {"name": "Command", "value": "`rm -rf /tmp/*`"},
+        {"name": "Policy", "value": "block-destructive"},
+        {"name": "Agent", "value": "claude-code", "inline": true},
+        {"name": "Session", "value": "myapp/main", "inline": true}
+      ],
+      "timestamp": "2026-03-03T14:23:05Z"
+    }
+  ]
+}
+```
+
+### Platform Setup
+
+<Tabs>
+  <Tab title="Discord">
+    1. In Discord, go to Server Settings → Integrations → Webhooks
+    2. Click "New Webhook"
+    3. Choose a channel and copy the webhook URL
+    4. Add to your policy:
+    
+    ```yaml
+    notify:
+      url: "https://discord.com/api/webhooks/123/abc"
+      on: ["deny"]
+    ```
+  </Tab>
+  
+  <Tab title="Slack">
+    1. Go to https://api.slack.com/apps
+    2. Create an app → Incoming Webhooks → Add New Webhook
+    3. Select a channel and copy the webhook URL
+    4. Add to your policy:
+    
+    ```yaml
+    notify:
+      url: "https://hooks.slack.com/services/T00/B00/xxx"
+      on: ["deny", "ask"]
+    ```
+  </Tab>
+  
+  <Tab title="Microsoft Teams">
+    1. In Teams, go to Apps → Incoming Webhook
+    2. Add to a channel and configure
+    3. Copy the webhook URL
+    4. Add to your policy:
+    
+    ```yaml
+    notify:
+      url: "https://webhook.office.com/webhookb2/..."
+      platform: "teams"
+      on: ["deny"]
+    ```
+  </Tab>
+</Tabs>
+
+### Complete Examples
+
+#### Multi-Event Notifications
+
+```yaml
+version: "1"
+default_action: allow
+
+notify:
+  url: "https://hooks.slack.com/services/..."
+  on: ["deny", "ask", "watch"]
+
+policies:
+  - name: security
+    match:
+      tool: ["exec"]
+    rules:
+      # Sends notification on deny
+      - action: deny
+        when:
+          command_matches: ["rm -rf /"]
+      
+      # Sends notification on ask
+      - action: ask
+        when:
+          command_contains: ["sudo"]
+      
+      # Sends notification on watch
+      - action: watch
+        when:
+          command_matches: ["curl *"]
+```
+
+#### Deny-Only Notifications
+
+```yaml
+notify:
+  url: "https://discord.com/api/webhooks/..."
+  on: ["deny"]  # Only notify on blocked commands
+
+policies:
+  - name: block-destructive
+    match:
+      tool: ["exec"]
+    rules:
+      - action: deny
+        when:
+          command_matches: ["rm -rf /"]
+        message: "Destructive command blocked"
+```
+
+## Webhook Security
+
+### Action Webhooks
+
+<Card title="Use HTTPS" icon="lock">
+  Always use HTTPS URLs for production webhooks to prevent interception.
+</Card>
+
+<Card title="Authenticate Requests" icon="key">
+  Your webhook endpoint should verify requests come from Rampart. Use a shared secret in a custom header:
+  
+  ```python
+  # In your webhook handler
+  if request.headers.get('X-Rampart-Token') != SECRET:
+      return {"decision": "deny", "reason": "Unauthorized"}
+  ```
+</Card>
+
+<Card title="Rate Limit" icon="gauge">
+  Add rate limiting to prevent abuse:
+  
+  ```python
+  from flask_limiter import Limiter
+  
+  limiter = Limiter(app, default_limits=["100 per minute"])
+  
+  @app.route('/verify', methods=['POST'])
+  @limiter.limit("10 per second")
+  def verify():
+      # ...
+  ```
+</Card>
+
+### Notification Webhooks
+
+<Card title="Protect Webhook URLs" icon="eye-slash">
+  Webhook URLs act as authentication tokens. Don't commit them to git. Use environment variables:
+  
+  ```yaml
+  notify:
+    url: "${RAMPART_NOTIFY_URL}"
+  ```
+</Card>
+
+<Card title="Rotate URLs Periodically" icon="rotate">
+  Regenerate webhook URLs every 90 days or when team members leave.
+</Card>
+
+## Validation Rules
+
+### Action Webhooks
+
+- `webhook.url` must be a valid HTTP/HTTPS URL
+- `webhook.timeout` must parse as a valid duration (e.g., `5s`, `100ms`, `1m`)
+- `webhook.fail_open` must be boolean if present
+- Response must include `decision` field with value `"allow"` or `"deny"`
+
+### Notification Webhooks
+
+- `notify.url` must be a valid HTTP/HTTPS URL
+- `notify.on` must be a non-empty array
+- `notify.on` values must be `"deny"`, `"watch"`, or `"ask"`
+- `notify.platform` must be one of: `auto`, `slack`, `discord`, `teams`, `openclaw`, `webhook`
+
+## Reference Implementation
+
+See [rampart-verify](https://github.com/peg/rampart-verify) for a complete webhook action implementation:
+
+- Flask server with `/verify` endpoint
+- LLM integration (OpenAI, Anthropic, Ollama)
+- Rate limiting and authentication
+- Structured logging
+- Docker deployment
+
+## Next Steps
+
+- Learn about [Actions](/schema/actions) (deny, allow, watch, ask)
+- Review [Match Conditions](/schema/match-conditions) for when clauses
+- Explore [Policy Structure](/schema/policy-structure) for top-level schema

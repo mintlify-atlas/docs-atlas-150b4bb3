@@ -1,0 +1,257 @@
+---
+title: Policy Structure
+description: Top-level YAML schema for Rampart policy files
+---
+
+# Policy Structure
+
+This page documents the top-level structure of Rampart policy files, including version, default action, notifications, and policy organization.
+
+## Schema Overview
+
+Every Rampart policy file follows this structure:
+
+```yaml
+version: "1"
+default_action: allow
+notify:
+  url: "https://..."
+  platform: "auto"
+  on: ["deny"]
+policies:
+  - name: my-policy
+    # ...
+```
+
+## Top-Level Fields
+
+<ParamField path="version" type="string" required>
+  Schema version. Always `"1"`. Required for all policy files.
+  
+  ```yaml
+  version: "1"
+  ```
+</ParamField>
+
+<ParamField path="default_action" type="string" required>
+  Default decision when no policy matches. Must be `"allow"` or `"deny"`.
+  
+  - `allow` - Permit unmatched tool calls (recommended for most use cases)
+  - `deny` - Block unmatched tool calls (paranoid mode)
+  
+  ```yaml
+  default_action: allow
+  ```
+  
+  <Note>
+  When using project policies (`.rampart/policy.yaml`), the global policy's `default_action` always takes precedence. Project policies can only add restrictions, not weaken security.
+  </Note>
+</ParamField>
+
+<ParamField path="policies" type="array" required>
+  List of policy objects. Each policy contains match conditions and rules. See [Match Conditions](/schema/match-conditions) for details.
+  
+  ```yaml
+  policies:
+    - name: block-destructive
+      match:
+        tool: ["exec"]
+      rules:
+        - action: deny
+          when:
+            command_matches: ["rm -rf /"]
+          message: "Destructive command blocked"
+  ```
+</ParamField>
+
+<ParamField path="notify" type="object">
+  Optional webhook notification configuration. Send alerts to Slack, Discord, Teams, or custom endpoints when policies trigger.
+  
+  <Expandable title="Notify Schema">
+    <ParamField path="notify.url" type="string" required>
+      Webhook URL to send notifications to. Required when `notify` is present.
+      
+      ```yaml
+      notify:
+        url: "https://discord.com/api/webhooks/your/webhook"
+      ```
+    </ParamField>
+    
+    <ParamField path="notify.platform" type="string" default="auto">
+      Notification platform format. Auto-detected from URL by default.
+      
+      Options:
+      - `auto` - Auto-detect based on URL (recommended)
+      - `slack` - Slack webhook format (hooks.slack.com)
+      - `discord` - Discord webhook format (discord.com/api/webhooks)
+      - `teams` - Microsoft Teams format (webhook.office.com)
+      - `openclaw` - OpenClaw notification format (openclaw.dev/ai/io)
+      - `webhook` - Generic JSON webhook
+      
+      ```yaml
+      notify:
+        url: "https://hooks.slack.com/services/..."
+        platform: "slack"  # Optional, auto-detected
+      ```
+    </ParamField>
+    
+    <ParamField path="notify.on" type="array" required>
+      Event types that trigger notifications. At least one event type required.
+      
+      Options:
+      - `deny` - Tool call was blocked
+      - `watch` - Tool call was flagged for review (formerly `log`)
+      - `ask` - Tool call requires human approval
+      
+      ```yaml
+      notify:
+        url: "https://..."
+        on: ["deny", "ask"]
+      ```
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Complete Example
+
+```yaml
+version: "1"
+default_action: allow
+
+notify:
+  url: "https://discord.com/api/webhooks/your/webhook"
+  on: ["deny"]
+
+policies:
+  # Block destructive commands
+  - name: block-destructive
+    priority: 1
+    match:
+      tool: ["exec"]
+    rules:
+      - action: deny
+        when:
+          command_matches:
+            - "rm -rf /"
+            - "rm -rf ~"
+            - "mkfs*"
+        message: "Destructive command blocked"
+
+  # Protect credentials
+  - name: block-credential-reads
+    priority: 1
+    match:
+      tool: ["read"]
+    rules:
+      - action: deny
+        when:
+          path_matches:
+            - "**/.ssh/id_*"
+            - "**/.aws/credentials"
+          path_not_matches:
+            - "**/*.pub"
+        message: "Credential access blocked"
+
+  # Block exfiltration domains
+  - name: block-exfil
+    priority: 2
+    match:
+      tool: ["fetch"]
+    rules:
+      - action: deny
+        when:
+          domain_matches:
+            - "*.ngrok-free.app"
+            - "webhook.site"
+        message: "Exfiltration domain blocked"
+
+  # Require approval for deployments
+  - name: approve-deploys
+    match:
+      tool: ["exec"]
+    rules:
+      - action: ask
+        when:
+          command_matches: ["kubectl apply *"]
+        message: "Deployment requires approval"
+```
+
+## Validation Rules
+
+### Required Fields
+
+- `version` must be present and set to `"1"`
+- `default_action` must be `"allow"` or `"deny"`
+- `policies` must be a non-empty array
+
+### Constraints
+
+- Policy names must be unique within a file
+- Each policy must have at least one rule
+- If `notify` is present, it must include `url` and `on`
+- `notify.on` must contain at least one valid event type
+
+### Best Practices
+
+<Card title="Deny Always Wins" icon="shield-halved">
+  If any policy denies a tool call, the call is denied regardless of other policies. Use this for security-critical rules.
+</Card>
+
+<Card title="Priority Ordering" icon="arrow-down-1-9">
+  Policies with lower priority numbers are evaluated first. Default priority is 100. Use priority 1 for critical security rules.
+</Card>
+
+<Card title="First Match Wins" icon="trophy">
+  Within a policy, rules are evaluated top-to-bottom. The first matching rule determines the action. Order your rules from specific to general.
+</Card>
+
+## Profile Presets
+
+Rampart includes built-in profiles with different security postures:
+
+| Profile | Default | Use Case |
+|---------|---------|----------|
+| `standard` | allow | Block dangerous, watch suspicious, allow the rest |
+| `ci` | allow | Strict mode for headless/CI - all approvals become denies |
+| `paranoid` | deny | Explicit allowlist for everything |
+| `yolo` | allow | Log-only, no blocking |
+
+Initialize a profile:
+
+```bash
+rampart init --profile standard
+rampart init --profile paranoid
+rampart init --profile ci
+```
+
+## Project-Local Policies
+
+Place `.rampart/policy.yaml` in any git repo to add project-specific rules on top of your global policy:
+
+```bash
+mkdir -p .rampart
+cat > .rampart/policy.yaml << 'EOF'
+version: "1"
+policies:
+  - name: myapp-no-prod-migrations
+    match:
+      tool: exec
+    rules:
+      - action: deny
+        when:
+          command_matches: ["*migrate*--env=production*"]
+        message: "Production migrations require human review"
+EOF
+```
+
+<Warning>
+  Project policies can only add restrictions, not weaken global policy. The global `default_action` always wins.
+  
+  Set `RAMPART_NO_PROJECT_POLICY=1` to skip project policy loading in untrusted repos.
+</Warning>
+
+## Next Steps
+
+- Learn about [Match Conditions](/schema/match-conditions) for targeting specific tool calls
+- Explore [Actions](/schema/actions) (deny, allow, watch, ask)
+- Configure [Webhooks](/schema/webhooks) for external decision logic

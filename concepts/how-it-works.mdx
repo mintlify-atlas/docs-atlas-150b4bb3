@@ -1,0 +1,279 @@
+---
+title: How it works
+description: Detailed explanation of policy evaluation flow and interception methods
+---
+
+Rampart sits between AI agents and their tools, evaluating every command, file access, and network request against your YAML policy before it executes. Dangerous commands are blocked in microseconds. Everything is logged.
+
+## Policy evaluation flow
+
+Pattern matching handles 95%+ of decisions in microseconds. The optional [rampart-verify](https://github.com/peg/rampart-verify) sidecar adds LLM-based classification for ambiguous commands. All decisions go to a hash-chained audit trail.
+
+<img src="/images/architecture.svg" alt="Rampart architecture diagram showing policy evaluation flow" />
+
+### Evaluation order
+
+When a tool call arrives, Rampart evaluates it in this order:
+
+1. **Match collection** — Collect all policies whose `match` clause fits the tool call (tool type, agent name, session)
+2. **Rule evaluation** — Within each policy, rules evaluate top-to-bottom until first match
+3. **Cross-policy resolution** — Across all matched policies:
+   - Any `deny` → denied immediately
+   - No deny + any `log` → logged  
+   - Only `allow` → allowed
+4. **Default action** — Nothing matches → configurable default action (allow or deny)
+
+<Note>
+Deny always wins. If any policy says deny, the call is denied. No ambiguity, no override.
+</Note>
+
+### Performance
+
+Policy evaluation happens in single-digit microseconds:
+
+| Command | Decision | Time |
+|---------|----------|------|
+| `rm -rf /` | deny | 8µs |
+| `sudo reboot` | watch | 6µs |
+| `.ssh/id_rsa` read | deny | 3µs |
+| `git status` | allow | 4µs |
+| `curl ngrok.io` | deny | 3µs |
+
+The proxy adds negligible latency. Agents wait seconds for LLM responses — a few microseconds of policy evaluation is invisible.
+
+## Interception methods
+
+Rampart supports multiple integration methods depending on your agent framework:
+
+### Native hooks
+
+**Supported agents:** Claude Code, Cline
+
+```bash
+rampart setup claude-code
+rampart setup cline
+```
+
+Native integration through the agent's hook system. Every Bash command, file read, and file write goes through Rampart's policy engine before execution. Blocked commands never run.
+
+<Info>
+Works in `--dangerously-skip-permissions` mode for Claude Code.
+</Info>
+
+**Coverage:**
+- Exec: ✅ (via PreToolUse hook)
+- File operations: ✅ (via hooks)
+- Response scanning: ✅ (PostToolUse for Claude Code)
+- Subprocess cascade: ❌
+
+### Shell wrapping
+
+**Supported agents:** Any agent that reads `$SHELL`
+
+```bash
+rampart wrap -- aider
+rampart wrap -- opencode
+rampart wrap -- python my_agent.py
+```
+
+`rampart wrap` sets `$SHELL` to a policy-checking shim. Works with any agent that spawns commands via the shell environment variable.
+
+**How it works:**
+
+1. Starts an embedded proxy
+2. Generates a shell shim script
+3. Sets `$SHELL` to point to the shim
+4. Execs the child process
+5. Every shell command spawned by the child goes through the shim
+6. Shim checks preflight API before executing
+
+<Warning>
+Shell wrapping only covers commands spawned via `$SHELL`. Direct syscalls bypass this method.
+</Warning>
+
+**Coverage:**
+- Exec: ✅ (via shell shim)
+- File operations: ❌
+- Response scanning: ❌  
+- Subprocess cascade: ✅ (LD_PRELOAD)
+
+### LD_PRELOAD interception
+
+**Supported platforms:** Linux (all), macOS (most binaries)
+
+```bash
+rampart preload -- codex
+rampart preload -- python my_agent.py
+```
+
+Intercepts exec-family syscalls at the OS level. This is the universal fallback — it works with **any** dynamically-linked process.
+
+Intercepts: `execve`, `execvp`, `system()`, `popen()`, `posix_spawn()`
+
+<Note>
+**Linux:** Works with all dynamically-linked binaries (~95% coverage)  
+**macOS:** Works with Homebrew, nvm, pyenv, cargo binaries. Blocked by SIP for `/usr/bin/*` (but AI agents don't live there)
+</Note>
+
+**Coverage:**
+- Exec: ✅ (syscall interception)
+- File operations: ❌
+- Response scanning: ❌
+- Subprocess cascade: ✅ (recursive LD_PRELOAD)
+
+### HTTP proxy
+
+**Supported:** Any framework that can make HTTP requests
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:9090/v1/tool/exec",
+    headers={"Authorization": f"Bearer {token}"},
+    json={
+        "agent": "my-agent",
+        "session": "s1",
+        "params": {"command": cmd}
+    }
+)
+
+if response.json()["decision"] == "deny":
+    return f"Blocked: {response.json()['message']}"
+```
+
+**Coverage:**
+- Exec: ✅ (if agent implements)
+- File operations: ✅ (if agent implements)
+- Response scanning: ✅
+- Subprocess cascade: ❌
+
+### MCP proxy
+
+**Supported:** Any MCP server
+
+```bash
+rampart mcp -- npx @modelcontextprotocol/server-filesystem /path
+```
+
+Drop-in proxy between your agent and any MCP server. Evaluates every `tools/call` against your policies.
+
+In your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "rampart",
+      "args": ["mcp", "--", "npx", "@modelcontextprotocol/server-filesystem", "."]
+    }
+  }
+}
+```
+
+Denied tool calls return a JSON-RPC error — the MCP server never sees them. Safe calls pass through transparently.
+
+**Coverage:**
+- Exec: ✅
+- File operations: ✅
+- Response scanning: ✅
+- Subprocess cascade: ❌
+
+## Command normalization
+
+Before pattern matching, commands go through normalization to prevent evasion:
+
+### Decoding
+
+- Base64 commands decoded before pattern matching
+- Leading shell comments stripped
+- ANSI escape sequences removed
+- Null bytes and control characters removed
+
+### Subcommand extraction
+
+Inner commands are matched independently:
+
+- `$(cmd)` — command substitution
+- Backticks — legacy command substitution  
+- `eval 'cmd'` — eval expressions
+
+### Pattern matching
+
+Two types of matching:
+
+**Glob patterns** (`command_matches`):
+
+```yaml
+command_matches:
+  - "rm -rf *"
+  - "mkfs.*"
+  - "dd if=*"
+```
+
+**Substring matching** (`command_contains`, case-insensitive):
+
+```yaml
+command_contains:
+  - "DROP TABLE"
+  - "rm -rf"
+  - "sudo "
+```
+
+<Info>
+Substring matching is more resilient against obfuscation but can produce false positives. Use both strategically.
+</Info>
+
+## Response-side scanning
+
+For agents with native hooks (Claude Code), Rampart scans tool responses for credential patterns:
+
+- AWS access keys
+- Private SSH keys
+- API tokens
+- Bearer tokens
+- Generic secrets (BASE64-encoded credentials)
+
+<Warning>
+Response scanning uses regex matching. This catches accidental credential leaks but is not a full DLP solution.
+</Warning>
+
+Regex complexity limits prevent ReDoS:
+
+- Maximum pattern length: 500 characters
+- Nested quantifiers rejected at load time
+- Execution timeout: 100ms per regex match
+- Response cap: 1MB maximum
+
+## Audit trail
+
+Every tool call is logged to hash-chained JSONL. Each entry includes a SHA-256 hash of the previous entry — tamper with any record and the chain breaks.
+
+```bash
+rampart audit tail --follow     # Stream events
+rampart audit verify            # Check chain integrity
+rampart audit stats             # Decision breakdown
+```
+
+Hash chaining features:
+
+- ULID event IDs (time-ordered, sortable)
+- External anchor every 100 events (prevents full-chain recomputation)
+- fsync on every write
+- Log rotation with chain continuity across files
+
+<Note>
+The hash-chained audit trail detects **partial tampering** (editing, inserting, or deleting individual records). A complete rewrite from scratch with a new valid chain is not detectable from the log file alone.
+</Note>
+
+## Hot-reload
+
+Policies hot-reload via fsnotify. Edit the YAML, Rampart picks it up automatically. No restart required.
+
+```bash
+# Edit your policy
+vim ~/.rampart/policies/custom.yaml
+
+# Rampart detects the change and reloads
+# No rampart serve restart needed
+```

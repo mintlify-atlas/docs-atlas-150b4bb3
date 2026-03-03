@@ -1,0 +1,358 @@
+---
+title: rampart hook
+description: AI agent hook for native integration
+---
+
+Processes tool call requests from AI agent hook systems (Claude Code, Cline). Reads JSON from stdin, evaluates against policy, returns allow/deny on stdout.
+
+## Usage
+
+```bash
+rampart hook [flags]
+```
+
+Typically called by agent frameworks, not directly by users.
+
+## How it works
+
+1. **Agent invokes hook** - Sends tool call as JSON on stdin
+2. **Hook parses input** - Extracts tool, command, parameters
+3. **Policy evaluation** - Checks against loaded policies
+4. **Response** - Returns decision as JSON on stdout
+5. **Agent proceeds** - Executes if allowed, blocks if denied
+
+## Flags
+
+<ParamField path="--audit-dir" type="string" default="~/.rampart/audit">
+  Directory for audit logs (JSONL files)
+</ParamField>
+
+<ParamField path="--mode" type="string" default="enforce">
+  Mode: `enforce`, `monitor`, or `audit`
+</ParamField>
+
+<ParamField path="--format" type="string" default="claude-code">
+  Input format: `claude-code` or `cline`
+</ParamField>
+
+<ParamField path="--serve-url" type="string" default="http://localhost:9090">
+  Rampart serve API URL (auto-discovered)
+</ParamField>
+
+<ParamField path="--serve-token" type="string">
+  Bearer token for serve API (auto-discovered from `~/.rampart/token`)
+</ParamField>
+
+<ParamField path="--config-dir" type="string" default="~/.rampart/policies/">
+  Additional policy directory (merged with `--config`)
+</ParamField>
+
+## Supported formats
+
+### claude-code
+
+Native Claude Code hook protocol.
+
+**Input (PreToolUse):**
+```json
+{
+  "session_id": "abc123",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "npm test"
+  },
+  "tool_use_id": "toolu_01ABC",
+  "cwd": "/home/user/project"
+}
+```
+
+**Output (allow):**
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow"
+  }
+}
+```
+
+**Output (deny):**
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Rampart: Destructive command blocked"
+  }
+}
+```
+
+**Output (ask):**
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "ask",
+    "permissionDecisionReason": "Production deployment requires approval"
+  }
+}
+```
+
+### cline
+
+Cline (VS Code extension) hook protocol.
+
+**Input:**
+```json
+{
+  "clineVersion": "3.0.0",
+  "hookName": "preToolUse",
+  "timestamp": "2026-03-03T14:23:01Z",
+  "taskId": "task_123",
+  "preToolUse": {
+    "toolName": "execute_command",
+    "parameters": {
+      "command": "npm test"
+    }
+  }
+}
+```
+
+**Output (allow):**
+```json
+{
+  "cancel": false
+}
+```
+
+**Output (deny):**
+```json
+{
+  "cancel": true,
+  "errorMessage": "Rampart: Destructive command blocked"
+}
+```
+
+## Setup
+
+Hook is typically configured by `rampart setup`.
+
+### Claude Code
+
+**Manual setup** (`~/.claude/settings.json`):
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rampart hook"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rampart hook"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Or use setup:**
+```bash
+rampart setup claude-code
+```
+
+### Cline
+
+**Use setup:**
+```bash
+rampart setup cline
+```
+
+## Policy evaluation
+
+Hook evaluates against:
+
+1. **Global policy** - `~/.rampart/policies/*.yaml`
+2. **Project policy** - `.rampart/policy.yaml` (if in git repo)
+3. **Embedded standard** - Fallback if no files found
+
+**Priority:**
+- Project denies override global
+- Global `default_action` always wins
+
+## Session detection
+
+Hook auto-detects session from git:
+
+```bash
+# In git repo: myapp, branch: main
+# Session: myapp/main
+```
+
+**Override:**
+```bash
+export RAMPART_SESSION=my-custom-session
+```
+
+## Audit output
+
+All tool calls are logged to `~/.rampart/audit/audit-hook-YYYY-MM-DD.jsonl`:
+
+```json
+{
+  "id": "01HGW1...",
+  "timestamp": "2026-03-03T14:23:01Z",
+  "agent": "claude-code",
+  "session": "myapp/main",
+  "tool": "exec",
+  "request": {"command": "npm test"},
+  "decision": {
+    "action": "allow",
+    "matched_policies": ["allow-dev"],
+    "message": "Development tool allowed"
+  },
+  "hash": "a7f3c2e8...",
+  "prev_hash": "b6e2d1c7..."
+}
+```
+
+## Examples
+
+### Test hook manually
+
+```bash
+# Create test input
+echo '{
+  "tool_name": "Bash",
+  "tool_input": {"command": "rm -rf /"}
+}' | rampart hook
+
+# Output:
+# {"hookSpecificOutput":{"hookEventName":"","permissionDecision":"deny","permissionDecisionReason":"Rampart: Destructive command blocked"}}
+```
+
+### Debug hook
+
+```bash
+# Enable verbose logging
+echo '{...}' | rampart hook --verbose
+
+# Check stderr for debug output
+```
+
+### Monitor mode
+
+```bash
+# Log only, don't block (modify settings.json)
+{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": ".*",
+      "hooks": [{"type": "command", "command": "rampart hook --mode monitor"}]
+    }]
+  }
+}
+```
+
+## Environment variables
+
+Hook reads:
+
+<ParamField path="RAMPART_SESSION" type="string">
+  Override auto-detected session (git repo/branch)
+</ParamField>
+
+<ParamField path="RAMPART_SERVE_URL" type="string" default="http://localhost:9090">
+  Override serve URL
+</ParamField>
+
+<ParamField path="RAMPART_TOKEN" type="string">
+  Override token (auto-read from `~/.rampart/token`)
+</ParamField>
+
+<ParamField path="RAMPART_NO_PROJECT_POLICY" type="string">
+  Set to `1` to skip project policy loading
+</ParamField>
+
+## Performance
+
+**Typical latency:**
+- Policy load: ~2ms (cached after first call)
+- Evaluation: 4μs
+- Audit write: less than 1ms
+- **Total: ~5ms per tool call**
+
+Invisible to user.
+
+## Troubleshooting
+
+### Hook not firing
+
+**Check settings.json:**
+```bash
+cat ~/.claude/settings.json | jq '.hooks'
+```
+
+**Verify rampart in PATH:**
+```bash
+which rampart
+```
+
+**Check hook command:**
+```bash
+echo '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | rampart hook
+```
+
+### Commands still allowed when they shouldn't be
+
+**Check policy:**
+```bash
+rampart policy lint
+rampart test "rm -rf /"
+```
+
+**Check audit:**
+```bash
+rampart audit tail --decision deny
+```
+
+### Session not detected
+
+**Check git repo:**
+```bash
+git rev-parse --show-toplevel
+git rev-parse --abbrev-ref HEAD
+```
+
+**Override:**
+```bash
+export RAMPART_SESSION=my-project
+```
+
+## Exit codes
+
+- `0` - Success (decision made)
+- `1` - Error (policy load failed, etc.)
+
+**Note:** Exit code does NOT indicate allow/deny. Check JSON output.
+
+## See also
+
+- [rampart setup](/cli/setup) - Install hooks
+- [rampart test](/cli/test) - Test policy decisions
+- [rampart watch](/cli/watch) - Monitor hook events
+- [Hook integration](/guides/hook-integration) - Integration guide

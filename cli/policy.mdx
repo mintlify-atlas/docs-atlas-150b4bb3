@@ -1,0 +1,379 @@
+---
+title: rampart policy
+description: Policy management and testing utilities
+---
+
+Utilities for managing, testing, and syncing Rampart security policies.
+
+## Usage
+
+```bash
+rampart policy <subcommand> [flags]
+```
+
+## Subcommands
+
+### init
+
+```bash
+rampart init [flags]
+```
+
+Initialize a policy file from a built-in profile.
+
+**Flags:**
+
+<ParamField path="--profile" type="string" default="standard">
+  Profile to use: `standard`, `paranoid`, `ci`, `yolo`, `research-agent`, or `mcp-server`
+</ParamField>
+
+<ParamField path="--project" type="boolean" default="false">
+  Create `.rampart/policy.yaml` in current directory (project-specific rules)
+</ParamField>
+
+<ParamField path="--defaults" type="boolean" default="false">
+  Reset to defaults (alias for `--force`)
+</ParamField>
+
+**Examples:**
+```bash
+# Initialize with standard profile
+rampart init --profile standard
+
+# Paranoid mode (deny by default)
+rampart init --profile paranoid
+
+# CI mode (all approvals become denies)
+rampart init --profile ci
+
+# Create project policy
+rampart init --project
+```
+
+**Output:**
+```
+✓ Policy written to ~/.rampart/policies/standard.yaml
+  3 policies loaded, default action: allow
+  Run 'rampart test' to verify
+```
+
+### lint
+
+```bash
+rampart policy lint [file]
+```
+
+Validate policy YAML for syntax errors and warnings.
+
+**Examples:**
+```bash
+# Lint default policy
+rampart policy lint
+
+# Lint specific file
+rampart policy lint custom.yaml
+```
+
+**Output:**
+```
+✓ Policy valid: 3 policies loaded
+```
+
+### explain
+
+```bash
+rampart policy explain <command> [flags]
+```
+
+Explain how a command is evaluated against the loaded policy. Shows which rules match and why.
+
+**Flags:**
+
+<ParamField path="--tool" type="string" default="exec">
+  Tool type: `exec`, `read`, `write`, `fetch`
+</ParamField>
+
+<ParamField path="--agent" type="string" default="*">
+  Agent identity to evaluate
+</ParamField>
+
+**Examples:**
+```bash
+# Explain command evaluation
+rampart policy explain "rm -rf /"
+
+# Explain with specific tool
+rampart policy explain --tool read "/etc/shadow"
+
+# Explain for specific agent
+rampart policy explain --agent claude-code "git push"
+```
+
+**Output:**
+```
+Evaluating: exec "rm -rf /"
+  Agent: * | Tool: exec
+
+Matching policies:
+  1. block-destructive (priority 1)
+     -> Rule 1: DENY "Destructive command blocked"
+        Matched: command_matches "rm -rf *"
+
+Final decision: DENY
+  Policy: block-destructive
+  Message: Destructive command blocked
+```
+
+### test
+
+Alias for `rampart test`. See [rampart test](/cli/test) for details.
+
+### list
+
+```bash
+rampart policy list
+```
+
+Browse community policy registry. Shows available policies with descriptions and installation commands.
+
+**Output:**
+```
+Community Policies:
+
+  python-dev
+    Python development workflow (pytest, pip, venv)
+    💻  rampart policy fetch python-dev
+
+  docker
+    Docker build and deployment rules
+    💻  rampart policy fetch docker
+
+  kubernetes
+    Kubernetes operations (kubectl, helm)
+    💻  rampart policy fetch kubernetes
+```
+
+### fetch
+
+```bash
+rampart policy fetch <name>
+```
+
+Download and install a community policy from the registry.
+
+**Examples:**
+```bash
+# Install Python development policy
+rampart policy fetch python-dev
+
+# Install Docker policy
+rampart policy fetch docker
+```
+
+**Output:**
+```
+Fetching policy: python-dev
+  Downloading from registry...
+  Verifying SHA256...
+✓ Installed to ~/.rampart/policies/community-python-dev.yaml
+  3 new rules loaded
+```
+
+### remove
+
+```bash
+rampart policy remove <name>
+```
+
+Remove an installed community policy.
+
+**Examples:**
+```bash
+rampart policy remove python-dev
+```
+
+**Output:**
+```
+✓ Removed ~/.rampart/policies/community-python-dev.yaml
+```
+
+### sync
+
+```bash
+rampart policy sync <git-url> [flags]
+```
+
+Sync policies from a git repository (team policy management).
+
+**Flags:**
+
+<ParamField path="--watch" type="boolean" default="false">
+  Foreground polling mode (checks for updates every 5 minutes)
+</ParamField>
+
+**Examples:**
+```bash
+# One-shot sync
+rampart policy sync https://github.com/org/rampart-policies
+
+# Continuous sync (foreground)
+rampart policy sync https://github.com/org/rampart-policies --watch
+```
+
+**Sync status:**
+```bash
+# Check sync state
+rampart policy sync status
+
+# Stop watch process
+rampart policy sync stop
+```
+
+**Output:**
+```
+✓ Cloned policies to ~/.rampart/policies/synced/
+  5 policy files synced
+  Last update: 2026-03-03 14:23:01 UTC
+```
+
+### generate
+
+```bash
+rampart policy generate [flags]
+```
+
+Generate policy templates from common patterns.
+
+**Flags:**
+
+<ParamField path="--from-audit" type="string">
+  Generate allowlist from audit trail
+</ParamField>
+
+<ParamField path="--deny-by-default" type="boolean" default="false">
+  Generate deny-by-default policy
+</ParamField>
+
+**Examples:**
+```bash
+# Generate allowlist from last 7 days of audit
+rampart policy generate --from-audit ~/.rampart/audit
+
+# Generate deny-by-default template
+rampart policy generate --deny-by-default
+```
+
+## Policy profiles
+
+### standard
+
+Default profile. Blocks dangerous commands, watches suspicious activity, allows the rest.
+
+- **Default action:** `allow`
+- **Use case:** Daily development with protection
+- **Policies:** block-destructive, block-credential-reads, block-exfil, watch-sudo
+
+### paranoid
+
+Explicit allowlist mode. Only explicitly allowed commands run.
+
+- **Default action:** `deny`
+- **Use case:** High-security environments, untrusted agents
+- **Policies:** allow-git, allow-dev-tools (must add more allowlist rules)
+
+### ci
+
+Strict mode for headless/CI environments. All approvals become hard denies.
+
+- **Default action:** `allow`
+- **Use case:** CI pipelines, automated agents, non-interactive
+- **Policies:** Same as standard, but `headless_only: true` on all `ask` rules
+
+### yolo
+
+Log-only mode. Nothing is blocked.
+
+- **Default action:** `allow`
+- **Use case:** Audit-only, learning phase, testing
+- **Policies:** All rules use `action: watch`
+
+### research-agent
+
+Allows data collection and analysis tools while blocking destructive operations.
+
+- **Default action:** `allow`
+- **Use case:** Research, data science, analysis agents
+- **Policies:** Allow data tools, block destructive, block credential access
+
+### mcp-server
+
+Deny-by-default for MCP servers. Only explicitly allowed tools run.
+
+- **Default action:** `deny`
+- **Use case:** MCP server protection
+- **Policies:** Generated from `rampart mcp scan`
+
+## Project policies
+
+Project policies (`.rampart/policy.yaml`) add repo-specific rules on top of global policy:
+
+```bash
+# Create project policy
+rampart init --project
+
+# Edit .rampart/policy.yaml
+vim .rampart/policy.yaml
+
+# Commit to git
+git add .rampart/policy.yaml
+git commit -m "Add Rampart project policy"
+```
+
+**Example project policy:**
+```yaml
+version: "1"
+policies:
+  - name: myapp-no-prod-migrations
+    match:
+      tool: exec
+    rules:
+      - action: deny
+        when:
+          command_matches: ["*migrate*--env=production*"]
+        message: "Production migrations require human review"
+```
+
+**Global policy always wins for:**
+- `default_action`
+- Deny rules (project cannot weaken global denies)
+
+**Disable project policy:**
+```bash
+export RAMPART_NO_PROJECT_POLICY=1
+```
+
+## Policy evaluation
+
+**Rule order:**
+1. Lower priority number = evaluated first
+2. First matching rule wins
+3. Deny always wins over allow
+
+**Actions:**
+- `deny` - Block immediately
+- `ask` - Require human approval (native prompt or dashboard)
+- `watch` - Log but allow
+- `allow` - Allow without logging
+- `webhook` - Delegate decision to external service
+
+## Exit codes
+
+- `0` - Success
+- `1` - Policy error or validation failed
+
+## See also
+
+- [rampart test](/cli/test) - Test commands against policy
+- [rampart init](/cli/policy#init) - Initialize policy files
+- [Policy syntax](/concepts/policies) - YAML policy reference
+- [Writing policies](/guides/writing-policies) - Policy authoring guide

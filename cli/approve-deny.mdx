@@ -1,0 +1,342 @@
+---
+title: Approval commands
+description: Manage human-in-the-loop approvals
+---
+
+Commands for approving and denying tool calls that require human review.
+
+## Usage
+
+```bash
+rampart pending
+rampart approve <approval-id>
+rampart deny <approval-id>
+```
+
+## Commands
+
+### pending
+
+```bash
+rampart pending [flags]
+```
+
+List all pending approval requests.
+
+**Flags:**
+
+<ParamField path="--api" type="string" default="http://127.0.0.1:9091">
+  Rampart API address (proxy or daemon)
+</ParamField>
+
+<ParamField path="--token" type="string">
+  Proxy auth token (or set `RAMPART_TOKEN`)
+</ParamField>
+
+**Examples:**
+```bash
+# List pending approvals
+rampart pending
+
+# With explicit API and token
+rampart pending --api http://localhost:9090 --token $RAMPART_TOKEN
+```
+
+**Output:**
+```
+ID       TOOL  COMMAND                   AGENT        EXPIRES   MESSAGE
+01HGW1   exec  kubectl apply -f prod...  claude-code  59m23s    Production deployment requires approval
+02HGW2   exec  rm -rf /tmp/data          wrapped      1h0m0s    Destructive operation requires approval
+```
+
+### approve
+
+```bash
+rampart approve <approval-id> [flags]
+```
+
+Approve a pending tool call. The command will execute after approval.
+
+**Flags:**
+
+<ParamField path="--api" type="string" default="http://127.0.0.1:9091">
+  Rampart API address (proxy or daemon)
+</ParamField>
+
+<ParamField path="--token" type="string">
+  Proxy auth token (or set `RAMPART_TOKEN`)
+</ParamField>
+
+**Examples:**
+```bash
+# Approve by full ID
+rampart approve 01HGW1ABCD1234567890ABCDEF
+
+# Approve by short ID (8 chars)
+rampart approve 01HGW1AB
+
+# With explicit token
+rampart approve 01HGW1AB --token $RAMPART_TOKEN
+```
+
+**Output:**
+```
+✓ Approval 01HGW1AB approved
+```
+
+### deny
+
+```bash
+rampart deny <approval-id> [flags]
+```
+
+Deny a pending tool call. The command will not execute.
+
+**Flags:**
+
+<ParamField path="--api" type="string" default="http://127.0.0.1:9091">
+  Rampart API address (proxy or daemon)
+</ParamField>
+
+<ParamField path="--token" type="string">
+  Proxy auth token (or set `RAMPART_TOKEN`)
+</ParamField>
+
+**Examples:**
+```bash
+# Deny by ID
+rampart deny 01HGW1AB
+
+# With explicit token
+rampart deny 01HGW1AB --token $RAMPART_TOKEN
+```
+
+**Output:**
+```
+✓ Approval 01HGW1AB denied
+```
+
+## Approval flow
+
+### Policy triggers approval
+
+When a command matches an `action: ask` rule:
+
+```yaml
+policies:
+  - name: production-deploys
+    match:
+      tool: ["exec"]
+    rules:
+      - action: ask
+        when:
+          command_matches: ["kubectl apply *", "terraform apply *"]
+        message: "Production deployment requires approval"
+```
+
+### Agent blocks and waits
+
+The agent receives a response indicating approval is required:
+
+```json
+{
+  "decision": "require_approval",
+  "approval_id": "01HGW1ABCD1234567890ABCDEF",
+  "message": "Production deployment requires approval",
+  "expires_at": "2026-03-03T15:23:01Z"
+}
+```
+
+### Human reviews and decides
+
+**Via CLI:**
+```bash
+rampart pending
+rampart approve 01HGW1AB
+```
+
+**Via Dashboard:**
+Open http://localhost:9090/dashboard/ and click Approve/Deny.
+
+**Via Watch TUI:**
+```bash
+rampart watch
+# Press 'a' to approve or 'd' to deny highlighted request
+```
+
+**Via Webhook:**
+If `notify` is configured, click the HMAC-signed approval URL in Slack/Discord.
+
+### Command executes or fails
+
+- **Approved** → Command executes normally
+- **Denied** → Command fails with `exit 126`
+- **Expired** → Command fails after timeout (default: 1 hour)
+
+## Token resolution
+
+Token is resolved in this order:
+
+1. `--token` flag
+2. `RAMPART_TOKEN` env var
+3. `~/.rampart/token` file (persisted by `rampart serve install`)
+
+```bash
+# Check token
+cat ~/.rampart/token
+
+# Set token env var
+export RAMPART_TOKEN=$(cat ~/.rampart/token)
+
+# Use in command
+rampart pending
+```
+
+## Approval expiration
+
+Default timeout: **1 hour**
+
+Configure with `--approval-timeout` on `rampart serve`:
+
+```bash
+# 30 minute timeout
+rampart serve --approval-timeout 30m
+
+# 2 hour timeout
+rampart serve --approval-timeout 2h
+```
+
+Expired approvals:
+- Automatically removed from pending list
+- Command fails with `exit 126`
+- Audit event shows `status: expired`
+
+## Audit trail
+
+All approval decisions are logged:
+
+```json
+{
+  "id": "01HGW1...",
+  "tool": "exec",
+  "request": {"command": "kubectl apply -f prod.yaml"},
+  "decision": {
+    "action": "require_approval",
+    "approval_id": "01HGW1...",
+    "approval_status": "approved",
+    "approved_by": "cli",
+    "approved_at": "2026-03-03T14:25:00Z"
+  }
+}
+```
+
+## Environment-specific behavior
+
+### Claude Code
+
+Uses native `action: ask` prompts when possible. Falls back to dashboard approvals if `rampart serve` is running.
+
+### MCP servers
+
+Blocks the JSON-RPC request until approved/denied. Client sees no response until resolved.
+
+### OpenClaw
+
+Chat message with approval ID. Resolve via CLI:
+```bash
+rampart approve <id>
+```
+
+### Webhook
+
+Signed approval URL sent to Slack/Discord:
+```
+Production deployment requires approval
+[✅ Approve] [❌ Deny]
+```
+
+## Examples
+
+### Workflow
+
+```bash
+# Terminal 1: Run agent
+claude
+
+# Agent attempts: kubectl apply -f prod.yaml
+# ⏳ waiting for approval — Production deployment requires approval
+# approval id: 01HGW1AB
+
+# Terminal 2: Review and approve
+rampart pending
+rampart approve 01HGW1AB
+
+# Terminal 1: Command executes
+# ✅ approved
+# deployment.apps/myapp configured
+```
+
+### Deny dangerous command
+
+```bash
+# Agent attempts: rm -rf /important
+# ⏳ waiting for approval — Destructive operation requires approval
+# approval id: 02HGW2CD
+
+rampart deny 02HGW2CD
+
+# Agent receives:
+# ❌ denied
+# rampart: blocked — Destructive operation requires approval
+```
+
+## Troubleshooting
+
+### "proxy auth token required"
+
+**Check token file:**
+```bash
+cat ~/.rampart/token
+```
+
+**Set token:**
+```bash
+export RAMPART_TOKEN=$(cat ~/.rampart/token)
+rampart pending
+```
+
+### "failed to connect to proxy"
+
+**Check serve is running:**
+```bash
+curl http://localhost:9090/healthz
+```
+
+**Start serve:**
+```bash
+rampart serve install
+```
+
+### Approvals not showing
+
+**Check API address:**
+```bash
+rampart pending --api http://localhost:9090
+```
+
+**Check logs:**
+```bash
+journalctl --user -u rampart -f
+```
+
+## Exit codes
+
+- `0` - Success
+- `1` - API error or not found
+
+## See also
+
+- [rampart serve](/cli/serve) - Start approval server
+- [rampart watch](/cli/watch) - TUI with approval support
+- [Approval flow](/concepts/approvals) - How approvals work
+- [Policy syntax](/concepts/policies) - `action: ask` rules

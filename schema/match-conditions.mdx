@@ -1,0 +1,513 @@
+---
+title: Match Conditions
+description: Match clause fields for targeting tool calls in Rampart policies
+---
+
+# Match Conditions
+
+Match conditions determine which tool calls a policy applies to and which specific rules within that policy should trigger. This page documents both policy-level matching (the `match` clause) and rule-level conditions (the `when` clause).
+
+## Policy-Level Match Clause
+
+The `match` clause at the policy level determines which tool types and agents the policy applies to:
+
+```yaml
+policies:
+  - name: my-policy
+    match:
+      tool: ["exec", "read"]
+      agent: "claude-code"
+    rules:
+      # ...
+```
+
+### Match Fields
+
+<ParamField path="match.tool" type="string | array" required>
+  Tool type(s) this policy applies to. Can be a single string or array of strings.
+  
+  **Standard tool types:**
+  - `exec` - Shell commands
+  - `read` - File read operations
+  - `write` - File write/edit operations
+  - `fetch` - HTTP/network requests
+  - `mcp` - Generic MCP tool calls
+  - `mcp-destructive` - MCP tools with destructive keywords (delete, destroy, remove, drop, purge, kill)
+  - `mcp-dangerous` - MCP tools with dangerous keywords (stop, restart, execute, modify, send, post)
+  
+  **MCP-specific tool names:**
+  - `mcp__server__toolname` - Target a specific MCP tool (e.g., `create_issue`, `send_message`)
+  
+  ```yaml
+  # Single tool
+  match:
+    tool: "exec"
+  
+  # Multiple tools
+  match:
+    tool: ["read", "write"]
+  
+  # MCP-specific tool
+  match:
+    tool: ["mcp__filesystem__write_file"]
+  ```
+</ParamField>
+
+<ParamField path="match.agent" type="string" default="*">
+  Glob pattern matching agent identity. Defaults to `*` (all agents).
+  
+  ```yaml
+  # Only apply to Claude Code
+  match:
+    tool: "exec"
+    agent: "claude-code"
+  
+  # Only apply to MCP clients
+  match:
+    tool: "mcp"
+    agent: "mcp-*"
+  ```
+</ParamField>
+
+## Rule-Level When Clause
+
+The `when` clause defines conditions for a specific rule to trigger. All conditions are optional - omit `when` entirely for unconditional rules.
+
+```yaml
+rules:
+  - action: deny
+    when:
+      command_matches: ["rm -rf /"]
+      session_matches: ["myapp/main"]
+    message: "Destructive command blocked on main branch"
+```
+
+### Command Conditions (exec tools)
+
+<ParamField path="when.command_matches" type="array">
+  Glob patterns matching the full command string. Case-sensitive.
+  
+  Glob syntax:
+  - `*` - Any characters (single segment)
+  - `**` - Any characters (crosses `/`)
+  - `?` - Any single character
+  
+  ```yaml
+  when:
+    command_matches:
+      - "rm -rf /"
+      - "sudo *"
+      - "bash -c **rm -rf /**"
+  ```
+  
+  <Note>
+  Use `**` to match paths with slashes. Limited to 2 `**` per pattern for performance.
+  </Note>
+</ParamField>
+
+<ParamField path="when.command_not_matches" type="array">
+  Exclude patterns. Rule only matches if command does NOT match any of these patterns.
+  
+  ```yaml
+  when:
+    command_matches:
+      - "rm -rf /var/**"
+    command_not_matches:
+      - "rm -rf /var/tmp"
+      - "rm -rf /var/cache"
+  ```
+  
+  <Tip>
+  Combine `command_matches` and `command_not_matches` to create allowlist exceptions.
+  </Tip>
+</ParamField>
+
+<ParamField path="when.command_contains" type="array">
+  Substring matching (case-insensitive). Checks if command contains any of these strings.
+  
+  ```yaml
+  when:
+    command_contains:
+      - "DROP TABLE"
+      - "rm -rf"
+      - "/dev/tcp/"
+  ```
+  
+  <Warning>
+  `command_contains` is case-insensitive and does substring matching. Use this for catching obfuscation bypasses that evade glob patterns.
+  </Warning>
+</ParamField>
+
+### Path Conditions (read/write tools)
+
+<ParamField path="when.path_matches" type="array">
+  Glob patterns matching file paths. Works on both Unix and Windows paths.
+  
+  ```yaml
+  when:
+    path_matches:
+      # Unix paths
+      - "**/.ssh/id_*"
+      - "**/.aws/credentials"
+      - "/etc/shadow"
+      # Windows paths
+      - "**\\.ssh\\id_*"
+      - "**\\System32\\**"
+  ```
+  
+  <Note>
+  Windows paths require double backslashes (`\\`) in YAML strings.
+  </Note>
+</ParamField>
+
+<ParamField path="when.path_not_matches" type="array">
+  Exclude path patterns. Rule only matches if path does NOT match any of these.
+  
+  ```yaml
+  when:
+    path_matches:
+      - "**/.ssh/id_*"
+    path_not_matches:
+      - "**/*.pub"  # Allow public keys
+  ```
+</ParamField>
+
+### Network Conditions (fetch tools)
+
+<ParamField path="when.url_matches" type="array">
+  Glob patterns matching full URLs.
+  
+  ```yaml
+  when:
+    url_matches:
+      - "https://api.github.com/**"
+      - "http://localhost:*"
+  ```
+</ParamField>
+
+<ParamField path="when.domain_matches" type="array">
+  Glob patterns matching domain names. Automatically extracts domain from URLs.
+  
+  ```yaml
+  when:
+    domain_matches:
+      - "*.ngrok.io"
+      - "*.ngrok-free.app"
+      - "webhook.site"
+      - "*.requestbin.com"
+  ```
+</ParamField>
+
+### Session Conditions
+
+<ParamField path="when.session_matches" type="array">
+  Glob patterns matching session identity. Sessions are auto-detected as `repo/branch` from git.
+  
+  ```yaml
+  when:
+    session_matches:
+      - "myapp/main"
+      - "myapp/production"
+      - "*/main"  # Any repo, main branch
+  ```
+  
+  <Tip>
+  Override auto-detected session with `RAMPART_SESSION=my-label`.
+  </Tip>
+</ParamField>
+
+<ParamField path="when.session_not_matches" type="array">
+  Exclude sessions. Rule only matches if session does NOT match any pattern.
+  
+  ```yaml
+  when:
+    session_not_matches:
+      - "myapp/dev"
+      - "myapp/test"
+  ```
+</ParamField>
+
+### Agent Depth Conditions
+
+<ParamField path="when.agent_depth" type="object">
+  Match nested sub-agent depth. `0` = top-level agent, `1+` = sub-agents.
+  
+  <Expandable title="Depth Schema">
+    <ParamField path="agent_depth.eq" type="integer">
+      Exact depth match.
+      
+      ```yaml
+      when:
+        agent_depth:
+          eq: 0  # Only top-level agent
+      ```
+    </ParamField>
+    
+    <ParamField path="agent_depth.gte" type="integer">
+      Greater than or equal to.
+      
+      ```yaml
+      when:
+        agent_depth:
+          gte: 1  # Sub-agents only
+      ```
+    </ParamField>
+    
+    <ParamField path="agent_depth.lte" type="integer">
+      Less than or equal to.
+      
+      ```yaml
+      when:
+        agent_depth:
+          lte: 2  # Limit nesting depth
+      ```
+    </ParamField>
+  </Expandable>
+  
+  ```yaml
+  # Block deep nesting (prevent privilege escalation)
+  when:
+    agent_depth:
+      gte: 3
+  ```
+</ParamField>
+
+### MCP Parameter Conditions
+
+<ParamField path="when.tool_param_matches" type="object">
+  Match MCP tool input parameters by case-insensitive glob pattern. Keys are parameter names, values are glob patterns. Rule matches if **any** parameter condition matches.
+  
+  ```yaml
+  when:
+    tool_param_matches:
+      path: "**/.env*"
+      url: "*webhook.site*"
+      action: "delete*"
+  ```
+</ParamField>
+
+### Response Conditions
+
+<ParamField path="when.response_matches" type="array">
+  Regex patterns matching tool output. Used for credential leak detection and prompt injection defense.
+  
+  ```yaml
+  when:
+    response_matches:
+      # AWS keys
+      - "AKIA[0-9A-Z]{16}"
+      # Private keys
+      - "-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+      # GitHub PATs
+      - "ghp_[a-zA-Z0-9]{36}"
+      # OpenAI keys
+      - "sk-[a-zA-Z0-9]{48}"
+      # Slack tokens
+      - "xox[bsapr]-[a-zA-Z0-9-]+"
+      # JWTs
+      - "eyJ[a-zA-Z0-9_-]+\\.eyJ[a-zA-Z0-9_-]+"
+  ```
+  
+  <Warning>
+  Response scanning adds latency. Use sparingly for high-value credential patterns.
+  </Warning>
+</ParamField>
+
+<ParamField path="when.response_not_matches" type="array">
+  Exclude response patterns. Rule only matches if response does NOT match any pattern.
+  
+  ```yaml
+  when:
+    response_matches:
+      - "AKIA[0-9A-Z]{16}"
+    response_not_matches:
+      - "AKIAIOSFODNN7EXAMPLE"  # Exclude AWS example key
+  ```
+</ParamField>
+
+### Rate Limiting
+
+<ParamField path="when.call_count" type="object">
+  Sliding-window rate limiting for tool calls. Rampart increments the counter on every PreToolUse event.
+  
+  <Expandable title="Call Count Schema">
+    <ParamField path="call_count.tool" type="string">
+      Optional tool type filter. Omit to count all tools.
+      
+      ```yaml
+      when:
+        call_count:
+          tool: fetch
+          gte: 100
+          window: 1h
+      ```
+    </ParamField>
+    
+    <ParamField path="call_count.gte" type="integer" required>
+      Trigger threshold (greater than or equal to).
+    </ParamField>
+    
+    <ParamField path="call_count.window" type="string" required>
+      Sliding window duration. Valid units: `1h`, `30m`, `10m`, `5m`, `1m`.
+    </ParamField>
+  </Expandable>
+  
+  ```yaml
+  # Block after 100 fetch calls in 1 hour
+  when:
+    call_count:
+      tool: fetch
+      gte: 100
+      window: 1h
+  ```
+</ParamField>
+
+### Default Catch-All
+
+<ParamField path="when.default" type="boolean">
+  Catch-all condition. When `true`, matches any tool call that reaches this rule.
+  
+  ```yaml
+  rules:
+    # Specific denies first
+    - action: deny
+      when:
+        command_contains: ["rm -rf /"]
+    # Then catch-all allow
+    - action: allow
+      when:
+        default: true
+  ```
+</ParamField>
+
+## Complete Examples
+
+### Block Credential Access
+
+```yaml
+policies:
+  - name: block-credential-reads
+    priority: 1
+    match:
+      tool: ["read"]
+    rules:
+      # Block SSH private keys
+      - action: deny
+        when:
+          path_matches:
+            - "**/.ssh/id_*"
+          path_not_matches:
+            - "**/*.pub"
+        message: "SSH private key access blocked"
+      
+      # Block cloud credentials
+      - action: deny
+        when:
+          path_matches:
+            - "**/.aws/credentials"
+            - "**/.aws/config"
+            - "**/.kube/config"
+            - "**/.docker/config.json"
+        message: "Cloud credential access blocked"
+      
+      # Block env files (except examples)
+      - action: deny
+        when:
+          path_matches:
+            - "**/.env"
+            - "**/.env.*"
+          path_not_matches:
+            - "**/.env.example"
+            - "**/.env.template"
+        message: "Environment file access blocked"
+```
+
+### Block Destructive Commands with Exceptions
+
+```yaml
+policies:
+  - name: block-destructive
+    match:
+      tool: ["exec"]
+    rules:
+      - action: deny
+        when:
+          command_matches:
+            - "rm -rf /var/**"
+          command_not_matches:
+            # Allow temp/build cleanup
+            - "rm -rf /var/tmp"
+            - "rm -rf /var/tmp/**"
+            - "rm -rf /var/cache"
+            - "rm -rf /var/log"
+        message: "Destructive /var command blocked"
+```
+
+### Detect Credential Leaks in Output
+
+```yaml
+policies:
+  - name: block-credential-leaks
+    match:
+      tool: ["exec", "read"]
+    rules:
+      - action: deny
+        when:
+          response_matches:
+            - "AKIA[0-9A-Z]{16}"  # AWS access key
+            - "-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+            - "ghp_[a-zA-Z0-9]{36}"  # GitHub PAT
+            - "sk-[a-zA-Z0-9]{48}"  # OpenAI key
+        message: "Sensitive credential detected in response"
+```
+
+### Rate Limit Network Calls
+
+```yaml
+policies:
+  - name: rate-limit-fetch
+    match:
+      tool: ["fetch", "web_search", "web_fetch"]
+    rules:
+      - action: ask
+        when:
+          call_count:
+            gte: 100
+            window: 1h
+        message: "High fetch volume - require approval to continue"
+```
+
+## Validation Rules
+
+### Pattern Syntax
+
+- Glob patterns use `*`, `**`, and `?` wildcards
+- `**` limited to 2 per pattern for performance
+- `command_contains` is case-insensitive, all others case-sensitive
+- Regex patterns (response_matches) use Go RE2 syntax
+
+### Logical Operators
+
+- Multiple conditions within `when` are AND'ed together
+- Multiple patterns within a condition field are OR'ed together
+- `*_not_matches` creates exclusions
+
+### Best Practices
+
+<Card title="Order Matters" icon="arrow-down">
+  Rules evaluate top-to-bottom. Place specific denies first, then catch-all allows.
+</Card>
+
+<Card title="Use command_contains for Bypasses" icon="shield">
+  Substring matching catches obfuscation tricks that evade glob patterns (e.g., `SUDO`, `Rm -Rf`).
+</Card>
+
+<Card title="Test Before Deploy" icon="vial">
+  Use `rampart test "command"` to dry-run commands against your policy.
+</Card>
+
+## Next Steps
+
+- Learn about [Actions](/schema/actions) (deny, allow, watch, ask)
+- Configure [Webhooks](/schema/webhooks) for external decision logic
+- Review [Policy Structure](/schema/policy-structure) for top-level schema

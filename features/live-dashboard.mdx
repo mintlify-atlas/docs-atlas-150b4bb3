@@ -1,0 +1,365 @@
+---
+title: Live Dashboard
+description: Real-time TUI and web dashboard for monitoring AI agent activity
+---
+
+# Live Dashboard
+
+Rampart provides two ways to monitor agent activity in real time:
+
+1. **TUI (Terminal UI)** — Colored event stream in your terminal
+2. **Web Dashboard** — Browser-based UI with filtering, approval buttons, and command testing
+
+## Terminal UI (TUI)
+
+Watch live events as they happen:
+
+```bash
+rampart watch
+```
+
+Output:
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║  RAMPART — enforce — 3 policies                             ║
+╠══════════════════════════════════════════════════════════════╣
+║  ✅ 21:03:42 exec  "git push origin main"     [allow-git]   ║
+║  ✅ 21:03:41 read  ~/project/src/main.go      [default]     ║
+║  🔴 21:03:38 exec  "rm -rf /tmp/*"            [protect-sys] ║
+║  ✅ 21:03:35 exec  "npm test"                 [allow-dev]   ║
+║  🟡 21:03:33 exec  "curl https://api.io"      [log-http]    ║
+╠══════════════════════════════════════════════════════════════╣
+║  1,247 total │ 1,201 allow │ 12 deny │ 34 watch             ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+### Event Indicators
+
+| Icon | Decision | Color | Meaning |
+|------|----------|-------|----------|
+| ✅ | allow | green | Command allowed and executed |
+| 🔴 | deny | red | Command blocked by policy |
+| 🟡 | watch | yellow | Command logged but allowed |
+| 👤 | ask | blue | Approval required |
+
+### TUI Features
+
+- **Live streaming**: New events appear instantly
+- **Auto-scroll**: Latest events always visible
+- **Color coding**: Quickly identify denies and approvals
+- **Summary stats**: Total events, breakdown by decision
+- **Lightweight**: Runs in any terminal, minimal resource usage
+
+### Keyboard Controls
+
+| Key | Action |
+|-----|--------|
+| `q` | Quit |
+| `Space` | Pause/Resume auto-scroll |
+| `↑`/`↓` | Scroll through history |
+| `r` | Refresh |
+
+## Web Dashboard
+
+When `rampart serve` is running, access the web dashboard at:
+
+```
+http://localhost:9090/dashboard/
+```
+
+### Dashboard Tabs
+
+#### 1. Active — Live Event Stream
+
+Real-time view of tool calls as they happen:
+
+- **Live updates**: Events appear instantly without page refresh
+- **Filtering**: Filter by tool, decision, agent, session
+- **Approve/Deny**: Click buttons to resolve pending approvals
+- **Copy commands**: Click to copy command text for inspection
+
+#### 2. History — Past Events
+
+Browse and search historical audit logs:
+
+- **Time range**: Select date range with calendar picker
+- **Tool filter**: Show only `exec`, `read`, `write`, `fetch`, or `mcp`
+- **Decision filter**: Filter by `allow`, `deny`, `watch`, `ask`
+- **Session filter**: Show events from specific git repos/branches
+- **Export**: Download filtered results as JSON or CSV
+
+#### 3. Policy — Loaded Rules
+
+View and test your active policy:
+
+- **Rule list**: See all loaded policies and their priorities
+- **Try a command**: REPL-style command tester
+  - Type a command: `rm -rf /tmp/build`
+  - See the decision: `deny` (matched: `block-destructive`)
+  - No execution — pure dry-run evaluation
+- **Policy reload**: Manually reload after editing policy files
+
+### Dark and Light Themes
+
+The dashboard automatically matches your system theme. Toggle manually:
+
+- **Dark mode**: Click moon icon
+- **Light mode**: Click sun icon
+
+## Starting the Dashboard
+
+<Steps>
+
+### Start as Background Service
+
+```bash
+rampart serve install
+```
+
+Installs to systemd (Linux) or launchd (macOS). Starts automatically on boot.
+
+### Start in Foreground
+
+```bash
+rampart serve
+```
+
+Runs in the foreground. Press `Ctrl+C` to stop.
+
+### Start in Background (No Service Manager)
+
+```bash
+rampart serve --background
+```
+
+Runs in the background without systemd/launchd. Stop with:
+
+```bash
+rampart serve stop
+```
+
+### Custom Port
+
+```bash
+rampart serve --port 8080
+```
+
+Dashboard available at `http://localhost:8080/dashboard/`.
+
+</Steps>
+
+## Approval Workflow in Dashboard
+
+When an `action: ask` rule triggers:
+
+1. **Event appears in Active tab** with status `pending`
+2. **Approve** or **Deny** buttons are enabled
+3. **Click Approve**: Command executes immediately
+4. **Click Deny**: Command is blocked, error returned to agent
+5. **Event updates** to show resolution time and user
+
+### Example: Pending Approval
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ 🟦 14:23:10  exec  "kubectl apply -f prod.yaml"           │
+│ Policy: production-deploys                                │
+│ Message: Production deployment requires approval          │
+│ Agent: claude-code  Session: myapp/main                   │
+│                                                            │
+│ [Approve] [Deny]                                          │
+└────────────────────────────────────────────────────────────┘
+```
+
+### Example: Resolved Approval
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ ✅ 14:23:10  exec  "kubectl apply -f prod.yaml"           │
+│ Policy: production-deploys                                │
+│ Resolved: approved by user@localhost at 14:23:15          │
+│ Agent: claude-code  Session: myapp/main                   │
+└────────────────────────────────────────────────────────────┘
+```
+
+## Command Testing REPL
+
+Test commands against your policy before they run:
+
+```
+┌─ Try a command ────────────────────────────────────────────┐
+│                                                            │
+│ > rm -rf /tmp/build                                       │
+│                                                            │
+│ Decision: allow                                           │
+│ Matched: (default)                                        │
+│ Message: Allowed by default_action                        │
+│ Eval time: 4µs                                            │
+│                                                            │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
+│ > rm -rf /                                                │
+│                                                            │
+│ Decision: deny                                            │
+│ Matched: block-destructive                                │
+│ Message: Destructive command blocked                      │
+│ Eval time: 8µs                                            │
+│                                                            │
+└────────────────────────────────────────────────────────────┘
+```
+
+No commands are executed — pure policy evaluation.
+
+## Filtering Events
+
+### By Tool
+
+Show only exec commands:
+
+```
+Tool: [All] [exec] [read] [write] [fetch] [mcp]
+      ^^^^^
+```
+
+### By Decision
+
+Show only denies:
+
+```
+Decision: [All] [allow] [deny] [watch] [ask]
+                        ^^^^^^
+```
+
+### By Session
+
+Show events from a specific repo/branch:
+
+```
+Session: [All] [myapp/main] [myapp/dev] [otherproject/staging]
+               ^^^^^^^^^^^^
+```
+
+## Exporting Dashboard Data
+
+Export filtered events:
+
+1. **Apply filters** (tool, decision, time range)
+2. **Click Export**
+3. **Choose format**: JSON or CSV
+4. **File downloads** with filtered events
+
+Example CSV:
+
+```csv
+timestamp,id,tool,agent,session,action,command,message,policies
+2026-03-03T14:23:05Z,evt_def456,exec,claude-code,myapp/main,deny,"rm -rf /tmp/*",Destructive command blocked,block-destructive
+```
+
+## Real-Time Updates
+
+The dashboard uses **Server-Sent Events (SSE)** for live updates:
+
+- **No polling**: Events pushed from server instantly
+- **Low latency**: Sub-100ms from policy decision to dashboard
+- **Auto-reconnect**: Dashboard reconnects if connection drops
+
+## Authentication
+
+By default, the dashboard runs on `localhost` with no authentication. For remote access, use authentication:
+
+```bash
+rampart serve --auth-token $(rampart token)
+```
+
+The dashboard requires the bearer token in the `Authorization` header.
+
+### Accessing from Remote Host
+
+Use SSH port forwarding:
+
+```bash
+ssh -L 9090:localhost:9090 your-server
+```
+
+Then open `http://localhost:9090/dashboard/` on your local machine.
+
+## Performance
+
+- **Event latency**: < 50ms from decision to dashboard
+- **Max throughput**: 1,000+ events/sec
+- **Resource usage**: < 10 MB RAM, < 1% CPU
+- **Browser support**: Chrome, Firefox, Safari, Edge (evergreen)
+
+## Mobile Support
+
+The dashboard is responsive and works on mobile browsers:
+
+- **Portrait mode**: Single-column layout
+- **Landscape mode**: Desktop-like layout
+- **Touch support**: Swipe to scroll, tap to approve/deny
+
+## Accessibility
+
+- **Keyboard navigation**: Tab through interactive elements
+- **Screen reader support**: Semantic HTML, ARIA labels
+- **High contrast**: Meets WCAG AA standards
+
+## Dashboard API
+
+The dashboard consumes the same HTTP API available to all clients:
+
+| Endpoint | Method | Purpose |
+|----------|--------|----------|
+| `/v1/events/stream` | GET | SSE stream of live events |
+| `/v1/approvals` | GET | List pending approvals |
+| `/v1/approvals/{id}/resolve` | POST | Approve or deny |
+| `/v1/preflight/exec` | POST | Dry-run command test |
+| `/v1/policy/reload` | POST | Reload policy files |
+
+See the [HTTP API reference](/api-reference) for full details.
+
+## Troubleshooting
+
+### Dashboard Not Loading
+
+Check that `rampart serve` is running:
+
+```bash
+rampart status
+```
+
+Expected output:
+
+```
+Service: running
+Port: 9090
+Policies: 3 loaded
+Audit: /home/user/.rampart/audit/
+```
+
+### Events Not Appearing
+
+Verify agent integration:
+
+```bash
+rampart doctor
+```
+
+Check that hooks are installed and the agent can reach the service.
+
+### Slow Updates
+
+Check network latency:
+
+```bash
+curl -s http://localhost:9090/healthz
+```
+
+Should return `{"status":"ok"}` in < 10ms.
+
+## See Also
+
+- [Approval Flow](/features/approval-flow) — Human-in-the-loop approvals
+- [Audit Trail](/features/audit-trail) — Hash-chained audit logging
+- [Webhook Notifications](/features/webhook-notifications) — Push notifications

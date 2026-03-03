@@ -1,0 +1,202 @@
+---
+title: CLI overview
+description: Command-line interface for Rampart runtime defense
+---
+
+Rampart provides a comprehensive CLI for installing, configuring, and managing policy enforcement for AI coding agents.
+
+## Command structure
+
+```bash
+rampart <command> [subcommand] [flags]
+```
+
+All commands support `--help` for detailed usage information.
+
+## Command groups
+
+### Setup
+
+Commands for installing and configuring Rampart:
+
+- `rampart quickstart` - One-shot setup: install service, configure hooks, verify
+- `rampart setup` - Set up integrations with AI agents (Claude Code, Cline, OpenClaw, Codex)
+- `rampart upgrade` - Upgrade to the latest or specified release
+- `rampart uninstall` - Remove Rampart from your system
+- `rampart doctor` - Check installation health
+
+### Policy
+
+Commands for managing security policies:
+
+- `rampart policy` - Policy utilities (lint, explain, fetch, sync)
+- `rampart test` - Test how policies evaluate commands
+- `rampart bench` - Benchmark policy coverage against attack corpus
+- `rampart watch` - Live TUI dashboard for audit decisions
+- `rampart allow` - Add an allow rule to custom policy
+- `rampart block` - Add a block rule to custom policy
+- `rampart rules` - Manage custom rules
+
+### Runtime
+
+Commands for running the policy engine:
+
+- `rampart serve` - Start policy runtime and file watcher
+- `rampart token` - Manage bearer tokens
+- `rampart status` - Quick dashboard showing protection status
+- `rampart log` - Pretty-print recent audit events
+
+### Approvals
+
+Commands for managing human-in-the-loop approvals:
+
+- `rampart pending` - List pending approval requests
+- `rampart approve` - Approve a pending tool call
+- `rampart deny` - Deny a pending tool call
+
+### Hooks
+
+Commands for wrapping and intercepting tool calls:
+
+- `rampart hook` - AI agent hook (reads JSON from stdin, returns allow/deny)
+- `rampart preload` - Run a command with librampart preloaded (LD_PRELOAD)
+- `rampart wrap` - Wrap a process with policy enforcement
+
+## Global flags
+
+<ParamField path="--config" type="string" default="rampart.yaml">
+  Path to policy config file
+</ParamField>
+
+<ParamField path="--verbose" type="boolean" default="false">
+  Enable debug logging
+</ParamField>
+
+<ParamField path="--version" type="boolean" default="false">
+  Print version information and exit
+</ParamField>
+
+## Exit codes
+
+- `0` - Success
+- `1` - General error or test failure
+- `126` - Command denied by policy
+
+## Environment variables
+
+<ParamField path="RAMPART_TOKEN" type="string">
+  Bearer token for API authentication (auto-detected from `~/.rampart/token`)
+</ParamField>
+
+<ParamField path="RAMPART_SESSION" type="string">
+  Session identifier for audit events (auto-detected from git repo/branch)
+</ParamField>
+
+<ParamField path="RAMPART_SERVE_URL" type="string" default="http://localhost:9090">
+  URL for rampart serve API
+</ParamField>
+
+<ParamField path="RAMPART_MODE" type="string" default="enforce">
+  Runtime mode: `enforce`, `monitor`, or `disabled`
+</ParamField>
+
+<ParamField path="RAMPART_NO_PROJECT_POLICY" type="string">
+  Set to `1` to skip project policy loading (security precaution for untrusted repos)
+</ParamField>
+
+## Common patterns
+
+### Initial setup
+
+```bash
+# Auto-detect and configure everything
+rampart quickstart
+
+# Or manual setup
+rampart serve install
+rampart setup claude-code
+rampart init --profile standard
+```
+
+### Testing policies
+
+```bash
+# Test a single command
+rampart test "rm -rf /"
+
+# Test a file read
+rampart test --tool read "/etc/shadow"
+
+# Run a test suite
+rampart test tests.yaml
+
+# Explain policy evaluation
+rampart policy explain "git push origin main"
+```
+
+### Monitoring
+
+```bash
+# Live dashboard
+rampart watch
+
+# Recent events
+rampart log --deny
+
+# Audit statistics
+rampart audit stats --since 24h
+
+# Search audit trail
+rampart audit search "npm install"
+```
+
+### Managing approvals
+
+```bash
+# List pending approvals
+rampart pending
+
+# Approve a request
+rampart approve 01HGW1...
+
+# Deny a request
+rampart deny 01HGW1...
+```
+
+## Configuration files
+
+### Policy files
+
+- `~/.rampart/policies/standard.yaml` - Built-in standard policy
+- `~/.rampart/policies/custom.yaml` - User-defined rules
+- `.rampart/policy.yaml` - Project-specific policy (git-committed)
+
+### Runtime files
+
+- `~/.rampart/token` - Persisted bearer token
+- `~/.rampart/audit/` - Audit trail (JSONL files)
+- `~/.rampart/signing.key` - HMAC key for approval URLs
+- `~/.rampart/ACTIVE_POLICY.md` - Current policy summary
+
+### Agent integrations
+
+- `~/.claude/settings.json` - Claude Code hooks
+- `~/.config/Cline/settings.json` - Cline hooks (VS Code)
+- `~/.local/bin/rampart-shim` - OpenClaw shell wrapper
+
+## Getting help
+
+```bash
+# Show all commands
+rampart --help
+
+# Command-specific help
+rampart serve --help
+rampart policy --help
+
+# Check installation
+rampart doctor
+
+# View version and build info
+rampart --version
+```

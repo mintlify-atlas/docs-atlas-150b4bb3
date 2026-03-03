@@ -1,0 +1,503 @@
+---
+title: SIEM Integration
+description: Export audit events to Splunk, Wazuh, QRadar, and other SIEMs via syslog or CEF
+---
+
+# SIEM Integration
+
+Send Rampart audit events to your existing security stack. Three output formats, works with any SIEM.
+
+## Supported Formats
+
+| Format | SIEMs | Protocol | Use Case |
+|--------|-------|----------|----------|
+| **RFC 5424 Syslog** | Wazuh, QRadar, ArcSight, LogRhythm, Sentinel | UDP/TCP | Standard syslog collectors |
+| **CEF (Common Event Format)** | Splunk, QRadar, ArcSight, Exabeam | UDP/TCP syslog | ArcSight-compatible SIEMs |
+| **CEF File** | Any file-based ingestion | Local file | When no syslog collector available |
+
+## Quick Start
+
+<Steps>
+
+### RFC 5424 Syslog
+
+Send events to a syslog collector:
+
+```bash
+rampart serve --syslog localhost:514
+```
+
+Use TCP instead of UDP:
+
+```bash
+rampart serve --syslog tcp://localhost:514
+```
+
+### CEF via Syslog
+
+Send CEF-formatted events to syslog:
+
+```bash
+rampart serve --syslog localhost:514 --cef
+```
+
+### CEF to File
+
+Write CEF events to a local file (when no syslog collector available):
+
+```bash
+rampart serve --cef
+```
+
+CEF file location: `~/.rampart/audit/audit.cef`
+
+</Steps>
+
+<Note>
+All three outputs run **alongside** the default JSONL audit trail. You don't lose local audit logs by enabling SIEM output.
+</Note>
+
+## Event Formats
+
+### RFC 5424 Syslog Format
+
+```syslog
+<134>1 2026-03-03T14:23:05Z myhost rampart - - [rampart@32473 decision="deny" tool="exec" agent="claude-code" session="myapp/main" policy="block-destructive"] Destructive command blocked: rm -rf /tmp/*
+```
+
+**Breakdown:**
+
+- `<134>` — Priority (facility: 16=local0, severity: 6=info)
+- `1` — Syslog version
+- `2026-03-03T14:23:05Z` — Timestamp (ISO 8601 UTC)
+- `myhost` — Hostname
+- `rampart` — Application name
+- `[rampart@32473 ...]` — Structured data with policy decision details
+
+### CEF Format
+
+```
+CEF:0|Rampart|PolicyEngine|v0.7.0|deny|Destructive command blocked|8|src=claude-code cmd=rm -rf /tmp/* path= policy=block-destructive
+```
+
+**Breakdown:**
+
+- `CEF:0` — CEF version
+- `Rampart` — Vendor
+- `PolicyEngine` — Product
+- `v0.7.0` — Version
+- `deny` — Event class (decision)
+- `Destructive command blocked` — Name (message)
+- `8` — Severity (0-10, mapped from decision)
+- `src=...` — Extension fields
+
+### CEF Severity Mapping
+
+| Decision | CEF Severity | Level |
+|----------|--------------|-------|
+| `deny` | 8 | High |
+| `ask` | 5 | Medium |
+| `watch` | 3 | Low |
+| `allow` | 1 | Informational |
+
+## Configuration Examples
+
+### Wazuh
+
+Send RFC 5424 syslog to Wazuh manager:
+
+```bash
+rampart serve --syslog wazuh.company.com:514
+```
+
+**Wazuh decoder** (`/var/ossec/etc/decoders/local_decoder.xml`):
+
+```xml
+<decoder name="rampart">
+  <prematch>^rampart</prematch>
+</decoder>
+
+<decoder name="rampart-decision">
+  <parent>rampart</parent>
+  <regex type="pcre2">decision="(\w+)" tool="(\w+)" agent="([^"]+)" session="([^"]+)" policy="([^"]+)"</regex>
+  <order>decision,tool,agent,session,policy</order>
+</decoder>
+```
+
+**Wazuh rules** (`/var/ossec/etc/rules/local_rules.xml`):
+
+```xml
+<group name="rampart,">
+  <rule id="100001" level="3">
+    <decoded_as>rampart</decoded_as>
+    <description>Rampart AI agent activity</description>
+  </rule>
+
+  <rule id="100002" level="10">
+    <if_sid>100001</if_sid>
+    <field name="decision">deny</field>
+    <description>Rampart blocked a dangerous command</description>
+  </rule>
+
+  <rule id="100003" level="5">
+    <if_sid>100001</if_sid>
+    <field name="decision">ask</field>
+    <description>Rampart approval required</description>
+  </rule>
+</group>
+```
+
+See [`docs/guides/wazuh-integration.md`](https://github.com/peg/rampart/blob/main/docs/guides/wazuh-integration.md) for full setup.
+
+### Splunk
+
+Send CEF to Splunk via syslog:
+
+```bash
+rampart serve --syslog splunk.company.com:514 --cef
+```
+
+**Splunk inputs.conf**:
+
+```ini
+[udp://514]
+connection_host = ip
+sourcetype = cef
+index = security
+```
+
+**Splunk searches**:
+
+```spl
+# All denied commands
+index=security sourcetype=cef Rampart deny
+
+# Credential access attempts
+index=security sourcetype=cef Rampart policy="block-credential-access"
+
+# By agent
+index=security sourcetype=cef Rampart src="claude-code"
+
+# Timeline
+index=security sourcetype=cef Rampart
+| timechart count by policy
+```
+
+### QRadar
+
+Send RFC 5424 syslog to QRadar:
+
+```bash
+rampart serve --syslog qradar.company.com:514
+```
+
+**QRadar Log Source**:
+
+1. **Admin** → **Data Sources** → **Log Sources**
+2. Click **Add**
+3. **Log Source Type**: "Syslog"
+4. **Protocol**: UDP
+5. **Log Source Identifier**: "Rampart"
+6. **Parse messages using**: Custom
+
+**QRadar Custom Rule**:
+
+```
+IF "decision=\"deny\"" IN payload
+THEN
+  SET category = "Policy Violation"
+  SET severity = 8
+```
+
+### ArcSight
+
+Send CEF to ArcSight via syslog:
+
+```bash
+rampart serve --syslog arcsight.company.com:514 --cef
+```
+
+ArcSight natively understands CEF. Events appear in the **Smart Connector** with:
+
+- **Device Vendor**: Rampart
+- **Device Product**: PolicyEngine
+- **Name**: Destructive command blocked
+- **Severity**: 8 (High)
+
+### Sentinel (Azure)
+
+Send syslog to Azure Log Analytics:
+
+```bash
+rampart serve --syslog sentinel-collector.company.com:514
+```
+
+**Log Analytics query**:
+
+```kql
+Syslog
+| where ProcessName == "rampart"
+| where SyslogMessage contains "deny"
+| project TimeGenerated, HostName, SyslogMessage
+| order by TimeGenerated desc
+```
+
+## Output Modes
+
+### UDP (Default)
+
+Fast, fire-and-forget:
+
+```bash
+rampart serve --syslog localhost:514
+```
+
+No delivery guarantee. Use for high-volume, low-criticality logging.
+
+### TCP
+
+Reliable delivery with connection tracking:
+
+```bash
+rampart serve --syslog tcp://localhost:514
+```
+
+Retries on failure, guarantees delivery. Use for compliance/audit.
+
+### TLS
+
+Encrypted syslog over TLS:
+
+```bash
+rampart serve --syslog tls://syslog.company.com:6514
+```
+
+Requires server certificate trust. Use for sensitive environments.
+
+## Filtering SIEM Events
+
+Send only specific decisions to SIEM:
+
+```bash
+# Only denies
+rampart serve --syslog localhost:514 --syslog-filter deny
+
+# Denies and approvals
+rampart serve --syslog localhost:514 --syslog-filter deny,ask
+```
+
+This reduces SIEM ingestion volume and cost.
+
+## Event Throttling
+
+Rampart rate-limits syslog output to prevent overwhelming collectors:
+
+- **Default**: 1,000 events/sec
+- **Buffering**: 10,000 events in memory
+- **Backpressure**: Blocks agent on buffer full
+
+Configure:
+
+```bash
+rampart serve --syslog localhost:514 --syslog-rate 5000  # 5k events/sec
+```
+
+## CEF Extension Fields
+
+| Field | Description | Example |
+|-------|-------------|----------|
+| `src` | Agent identifier | `claude-code` |
+| `cmd` | Command executed | `rm -rf /tmp/*` |
+| `path` | File path (for read/write) | `/home/user/.ssh/id_rsa` |
+| `policy` | Matched policy names | `block-destructive,watch-sudo` |
+| `suser` | Session identifier | `myapp/main` |
+| `duser` | Resolved by (for approvals) | `user@localhost` |
+
+## Syslog Structured Data
+
+RFC 5424 structured data fields:
+
+| Field | Description | Example |
+|-------|-------------|----------|
+| `decision` | Policy decision | `deny` |
+| `tool` | Tool name | `exec` |
+| `agent` | Agent identifier | `claude-code` |
+| `session` | Session label | `myapp/main` |
+| `policy` | Matched policy | `block-destructive` |
+| `duration_us` | Eval time (µs) | `8` |
+
+## Example SIEM Queries
+
+### Splunk
+
+```spl
+# Denied commands over time
+index=security sourcetype=cef Rampart deny
+| timechart count by policy
+
+# Top blocked agents
+index=security sourcetype=cef Rampart deny
+| stats count by src
+| sort -count
+
+# Credential access attempts
+index=security sourcetype=cef Rampart policy=block-credential-access
+| table _time src cmd
+```
+
+### Wazuh
+
+```xml
+<!-- Alert on 5+ denies in 5 minutes -->
+<rule id="100010" level="12" frequency="5" timeframe="300">
+  <if_matched_sid>100002</if_matched_sid>
+  <description>Rampart: Multiple blocked commands (possible attack)</description>
+</rule>
+```
+
+### QRadar
+
+```sql
+-- Top 10 blocked commands
+SELECT payload, COUNT(*) as count
+FROM events
+WHERE "Log Source" = 'Rampart' AND payload LIKE '%deny%'
+GROUP BY payload
+ORDER BY count DESC
+LIMIT 10
+```
+
+## Compliance Use Cases
+
+### SOC 2 Type II
+
+**Requirement**: Audit all automated system access.
+
+**Solution**:
+
+```bash
+rampart serve --syslog splunk.company.com:514 --cef
+```
+
+Splunk stores all AI agent tool calls. Run compliance reports:
+
+```spl
+index=security sourcetype=cef Rampart
+| stats count by decision, policy
+| outputlookup rampart_monthly_report.csv
+```
+
+### PCI-DSS
+
+**Requirement**: Log and monitor all access to cardholder data.
+
+**Solution**:
+
+```yaml
+policies:
+  - name: pci-data-access
+    match:
+      tool: ["read", "exec"]
+    rules:
+      - action: watch
+        when:
+          path_matches:
+            - "**/cardholder_data/**"
+          command_contains:
+            - "cardholder_data"
+        message: "PCI data access logged"
+```
+
+All reads/execs matching cardholder data are sent to SIEM.
+
+### HIPAA
+
+**Requirement**: Audit access to protected health information (PHI).
+
+**Solution**:
+
+```yaml
+policies:
+  - name: hipaa-phi-access
+    match:
+      tool: ["read", "write", "exec"]
+    rules:
+      - action: watch
+        when:
+          path_matches:
+            - "**/phi/**"
+            - "**/medical_records/**"
+        message: "HIPAA PHI access logged"
+```
+
+SIEM stores immutable record of all PHI access.
+
+## Performance
+
+- **Overhead**: < 100µs per event
+- **Throughput**: 10,000+ events/sec (UDP)
+- **Memory**: < 5 MB (buffer)
+- **CPU**: < 1% (background goroutine)
+
+## Troubleshooting
+
+### Events Not Appearing in SIEM
+
+**Check connectivity**:
+
+```bash
+telnet syslog.company.com 514
+```
+
+**Check Rampart logs**:
+
+```bash
+rampart serve --log-level debug --syslog localhost:514
+```
+
+Look for:
+
+```
+DEBUG syslog sent event=evt_abc123 addr=localhost:514
+```
+
+**Test with netcat**:
+
+```bash
+# Terminal 1: Listen
+nc -ul 514
+
+# Terminal 2: Send syslog
+rampart serve --syslog localhost:514
+
+# Trigger an event
+rampart test "rm -rf /"
+```
+
+You should see syslog output in Terminal 1.
+
+### Missing Fields in SIEM
+
+**For CEF**: Check that SIEM supports CEF extension fields.
+
+**For RFC 5424**: Verify SIEM parses structured data (`[rampart@32473 ...]`).
+
+### High Latency
+
+**Use UDP instead of TCP**:
+
+```bash
+rampart serve --syslog udp://localhost:514
+```
+
+**Reduce event volume**:
+
+```bash
+rampart serve --syslog localhost:514 --syslog-filter deny
+```
+
+## See Also
+
+- [Audit Trail](/features/audit-trail) — Hash-chained JSONL logging
+- [Webhook Notifications](/features/webhook-notifications) — Discord/Slack alerts
+- [Wazuh Integration Guide](https://github.com/peg/rampart/blob/main/docs/guides/wazuh-integration.md) — Full Wazuh setup

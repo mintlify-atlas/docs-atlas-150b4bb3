@@ -1,0 +1,354 @@
+---
+title: 'Preflight'
+description: 'POST /v1/preflight/{toolName} — Dry-run policy evaluation'
+---
+
+## Endpoint
+
+```http
+POST /v1/preflight/{toolName}
+```
+
+Dry-run policy evaluation. Does **not** create/resolve approvals or execute the tool. Use this to check if a tool call would be allowed before attempting it.
+
+<Info>
+Preflight checks are useful for agents that plan before acting. They return the policy decision without side effects.
+</Info>
+
+## Path Parameters
+
+<ParamField path="toolName" type="string" required>
+  The name of the tool to evaluate (e.g., `exec`, `read`, `write`, `fetch`)
+</ParamField>
+
+## Request Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for authentication
+  
+  ```
+  Authorization: Bearer <token>
+  ```
+</ParamField>
+
+<ParamField header="Content-Type" type="string" required>
+  Must be `application/json`
+</ParamField>
+
+## Request Body
+
+The request body schema is identical to [`POST /v1/tool/{toolName}`](/api/tool-evaluation#request-body).
+
+<ParamField body="agent" type="string" required>
+  Agent identifier
+</ParamField>
+
+<ParamField body="session" type="string" required>
+  Session identifier
+</ParamField>
+
+<ParamField body="params" type="object" required>
+  Tool-specific parameters
+</ParamField>
+
+<ParamField body="run_id" type="string">
+  Optional run identifier
+</ParamField>
+
+<ParamField body="input" type="object">
+  Optional tool input
+</ParamField>
+
+## Response Fields
+
+<ResponseField name="allowed" type="boolean" required>
+  Whether the tool call would be allowed (`true` for `allow` or `watch` decisions)
+</ResponseField>
+
+<ResponseField name="decision" type="string" required>
+  Policy decision: `allow`, `deny`, `watch`, `ask`, or `require_approval`
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable decision message
+</ResponseField>
+
+<ResponseField name="matched_policies" type="array" required>
+  Array of policy names that matched this tool call
+</ResponseField>
+
+<ResponseField name="eval_duration_us" type="integer" required>
+  Policy evaluation time in microseconds
+</ResponseField>
+
+<ResponseField name="suggestions" type="array">
+  Array of suggested commands to allow the operation (appears on `deny`)
+</ResponseField>
+
+## Status Codes
+
+| Status | Meaning |
+|--------|----------|
+| `200 OK` | Evaluation successful |
+| `400 Bad Request` | Invalid JSON body |
+| `401 Unauthorized` | Missing or invalid bearer token |
+
+<Note>
+Unlike `POST /v1/tool/{toolName}`, preflight never returns `403 Forbidden` or `202 Accepted`. It always returns `200 OK` with the evaluation result.
+</Note>
+
+## Examples
+
+### Check Allowed Command
+
+```bash
+TOKEN="$(cat ~/.rampart/token)"
+curl -X POST "http://127.0.0.1:9090/v1/preflight/exec" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "claude-code",
+    "session": "repo/main",
+    "params": {
+      "command": "npm test"
+    }
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "allowed": true,
+  "decision": "allow",
+  "message": "development command allowed",
+  "matched_policies": ["allow-dev"],
+  "eval_duration_us": 7
+}
+```
+
+### Check Blocked Command
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/preflight/exec" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "claude-code",
+    "session": "repo/main",
+    "params": {
+      "command": "rm -rf /"
+    }
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "allowed": false,
+  "decision": "deny",
+  "message": "destructive command blocked",
+  "matched_policies": ["block-destructive"],
+  "eval_duration_us": 8
+}
+```
+
+### Check Credential Access
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/preflight/read" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "cline",
+    "session": "project/feature",
+    "params": {
+      "path": "/home/user/.aws/credentials"
+    }
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "allowed": false,
+  "decision": "deny",
+  "message": "credential access blocked",
+  "matched_policies": ["block-credential-reads"],
+  "eval_duration_us": 3
+}
+```
+
+### Check Watched Command
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/preflight/exec" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "aider",
+    "session": "webapp/dev",
+    "params": {
+      "command": "curl https://api.example.com"
+    }
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "allowed": true,
+  "decision": "watch",
+  "message": "network request logged",
+  "matched_policies": ["log-network"],
+  "eval_duration_us": 6
+}
+```
+
+<Info>
+`watch` decisions return `allowed: true` because the tool call is permitted, but the activity is logged for monitoring.
+</Info>
+
+### Check Approval-Required Command
+
+```bash
+curl -X POST "http://127.0.0.1:9090/v1/preflight/exec" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent": "claude-code",
+    "session": "myapp/production",
+    "params": {
+      "command": "kubectl delete pod critical-service"
+    }
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "allowed": false,
+  "decision": "require_approval",
+  "message": "production change requires approval",
+  "matched_policies": ["require-human"],
+  "eval_duration_us": 10
+}
+```
+
+<Note>
+Preflight returns `allowed: false` for `require_approval` and `ask` decisions because the tool call cannot proceed without human intervention.
+</Note>
+
+## Common Use Cases
+
+### Plan Before Execute
+
+```python
+import requests
+
+def can_execute(command, agent="my-agent", session="default"):
+    """Check if a command would be allowed before executing it."""
+    with open(os.path.expanduser("~/.rampart/token")) as f:
+        token = f.read().strip()
+    
+    response = requests.post(
+        "http://localhost:9090/v1/preflight/exec",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "agent": agent,
+            "session": session,
+            "params": {"command": command}
+        }
+    )
+    
+    result = response.json()
+    return result.get("allowed", False)
+
+# Use in agent planning
+if can_execute("npm install dangerous-package"):
+    print("Safe to proceed")
+else:
+    print("Command would be blocked — finding alternative")
+```
+
+### Batch Policy Check
+
+```bash
+#!/bin/bash
+# Check multiple commands before attempting them
+
+TOKEN="$(cat ~/.rampart/token)"
+
+for cmd in "git push" "docker build" "rm -rf /tmp/cache"; do
+  result=$(curl -s -X POST "http://127.0.0.1:9090/v1/preflight/exec" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"agent":"ci","session":"build/main","params":{"command":"'"$cmd"'"}}')
+  
+  allowed=$(echo "$result" | jq -r '.allowed')
+  
+  if [ "$allowed" = "true" ]; then
+    echo "✓ $cmd"
+  else
+    echo "✗ $cmd"
+  fi
+done
+```
+
+### Agent Planning Loop
+
+```javascript
+const axios = require('axios');
+const fs = require('fs');
+
+const token = fs.readFileSync(process.env.HOME + '/.rampart/token', 'utf8').trim();
+
+async function isAllowed(command) {
+  const response = await axios.post(
+    'http://localhost:9090/v1/preflight/exec',
+    {
+      agent: 'js-agent',
+      session: 'automation/prod',
+      params: { command }
+    },
+    {
+      headers: { Authorization: `Bearer ${token}` }
+    }
+  );
+  
+  return response.data.allowed;
+}
+
+// Agent planning: try safe alternatives first
+const options = ['npm ci', 'npm install --prefer-offline', 'npm install'];
+
+for (const cmd of options) {
+  if (await isAllowed(cmd)) {
+    console.log(`Using: ${cmd}`);
+    // execute the command
+    break;
+  }
+}
+```
+
+## Differences from Tool Evaluation
+
+| Feature | `/v1/tool/{toolName}` | `/v1/preflight/{toolName}` |
+|---------|----------------------|---------------------------|
+| Executes tool | Caller decides | No |
+| Creates approvals | Yes (on `ask`/`require_approval`) | No |
+| Audit log | Yes | Yes |
+| Returns `403 Forbidden` | Yes (enforce mode) | No |
+| Returns `202 Accepted` | Yes (approval required) | No |
+| Always returns `200 OK` | No | Yes |
+| Side effects | Possible (approvals, notifications) | None (audit only) |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Tool Evaluation" icon="gavel" href="/api/tool-evaluation">
+    Execute and evaluate tool calls
+  </Card>
+  <Card title="Approvals" icon="check-circle" href="/api/approvals">
+    Manage approval workflows
+  </Card>
+</CardGroup>

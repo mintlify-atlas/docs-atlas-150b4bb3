@@ -1,0 +1,502 @@
+---
+title: Actions
+description: Action types for Rampart policy rules (deny, allow, watch, ask)
+---
+
+# Actions
+
+Actions determine what happens when a policy rule matches a tool call. Rampart supports four core actions plus webhook delegation.
+
+## Action Types
+
+<ParamField path="action" type="string" required>
+  The decision to apply when a rule matches. Every rule must specify an action.
+  
+  Options:
+  - `deny` - Block the tool call
+  - `allow` - Permit the tool call
+  - `watch` - Permit but flag for review (formerly `log`)
+  - `ask` - Block until human approves/denies
+  - `webhook` - Delegate decision to external HTTP endpoint
+  
+  ```yaml
+  rules:
+    - action: deny
+      when:
+        command_matches: ["rm -rf /"]
+  ```
+</ParamField>
+
+## Deny Action
+
+Blocks the tool call immediately. The agent receives an error message and the call never executes.
+
+```yaml
+rules:
+  - action: deny
+    when:
+      command_matches:
+        - "rm -rf /"
+        - "mkfs*"
+        - "dd if=*"
+    message: "Destructive command blocked"
+```
+
+<ParamField path="message" type="string">
+  Optional error message shown to the agent. If omitted, Rampart generates a default message.
+  
+  ```yaml
+  - action: deny
+    when:
+      path_matches: ["**/.ssh/id_*"]
+    message: "SSH private key access blocked"
+  ```
+  
+  <Tip>
+  Include actionable guidance in error messages:
+  ```yaml
+  message: "Production deployments require approval. Run: rampart approve <id>"
+  ```
+  </Tip>
+</ParamField>
+
+### Deny Always Wins
+
+If **any** policy denies a tool call, the call is denied regardless of other policies. Use this for security-critical rules:
+
+```yaml
+policies:
+  # Priority 1 - evaluated first
+  - name: block-credentials
+    priority: 1
+    match:
+      tool: ["read"]
+    rules:
+      - action: deny
+        when:
+          path_matches: ["**/.aws/credentials"]
+  
+  # Priority 100 - evaluated later
+  - name: allow-reads
+    priority: 100
+    match:
+      tool: ["read"]
+    rules:
+      - action: allow
+        when:
+          default: true
+  
+  # Result: .aws/credentials reads are DENIED
+  # even though allow-reads would permit them
+```
+
+## Allow Action
+
+Permits the tool call to execute normally. Use for explicit allowlists or to override lower-priority denies.
+
+```yaml
+rules:
+  - action: allow
+    when:
+      command_matches:
+        - "git *"
+        - "npm test"
+        - "go build *"
+```
+
+<Note>
+  Allow actions are useful in `paranoid` mode (default_action: deny) to create explicit allowlists.
+</Note>
+
+## Watch Action
+
+Permits the tool call but flags it for review. Logged events appear in audit trail and dashboard with a warning indicator.
+
+```yaml
+rules:
+  - action: watch
+    when:
+      command_matches:
+        - "curl *"
+        - "wget *"
+    message: "Network command logged"
+```
+
+<ParamField path="message" type="string">
+  Optional audit annotation. Appears in logs and dashboard.
+  
+  ```yaml
+  - action: watch
+    when:
+      command_contains: ["sudo"]
+    message: "Privileged command executed"
+  ```
+</ParamField>
+
+### Watch vs Log
+
+`log` is a deprecated alias for `watch`. New policies should use `watch`:
+
+```yaml
+# Old (deprecated)
+- action: log
+
+# New (preferred)
+- action: watch
+```
+
+## Ask Action
+
+Blocks the tool call until a human approves or denies it. How approval reaches you depends on the environment:
+
+```yaml
+rules:
+  - action: ask
+    when:
+      command_matches: ["kubectl apply *"]
+    message: "Deployment requires approval"
+```
+
+### Approval Flow by Environment
+
+| Environment | How It Works |
+|-------------|-------------|
+| **Claude Code** | Native approval prompt in UI |
+| **MCP Client** | Proxy holds request, resolve via API/dashboard |
+| **OpenClaw** | Chat message with inline approve/deny |
+| **Webhook** | Notification with HMAC-signed approve/deny links |
+| **CLI/API** | Manual resolution with `rampart approve <id>` |
+
+### Ask Configuration
+
+<ParamField path="ask" type="object">
+  Optional configuration for ask actions.
+  
+  <Expandable title="Ask Schema">
+    <ParamField path="ask.audit" type="boolean" default="false">
+      Log whether the user approved or denied the request.
+      
+      ```yaml
+      - action: ask
+        ask:
+          audit: true
+        when:
+          command_matches: ["kubectl apply *"]
+      ```
+    </ParamField>
+    
+    <ParamField path="ask.headless_only" type="boolean" default="false">
+      Block in CI/headless mode instead of waiting for approval. Converts `ask` to `deny` when no interactive terminal is available.
+      
+      ```yaml
+      - action: ask
+        ask:
+          headless_only: true
+        when:
+          command_matches: ["terraform apply *"]
+      ```
+      
+      <Tip>
+      Use this to prevent CI pipelines from hanging on approval prompts.
+      </Tip>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Approval Timeout
+
+Pending approvals expire after **1 hour** by default. Configure with `--approval-timeout`:
+
+```bash
+rampart serve --approval-timeout 2h
+```
+
+### Managing Approvals
+
+```bash
+# List pending approvals
+rampart pending
+
+# Approve a request
+rampart approve abc123
+
+# Deny a request
+rampart deny abc123
+```
+
+### require_approval Alias
+
+`require_approval` is a deprecated alias for `ask` with `audit: true`. New policies should use `ask`:
+
+```yaml
+# Old (deprecated)
+- action: require_approval
+
+# New (preferred)
+- action: ask
+  ask:
+    audit: true
+```
+
+## Webhook Action
+
+Delegates the allow/deny decision to an external HTTP endpoint. Use for LLM-based intent verification, Slack approval bots, or custom logic.
+
+```yaml
+rules:
+  - action: webhook
+    when:
+      command_matches: ['*production*']
+    webhook:
+      url: 'http://localhost:8090/verify'
+      timeout: 5s
+      fail_open: true
+```
+
+### Webhook Configuration
+
+<ParamField path="webhook" type="object" required>
+  Webhook endpoint configuration. Required when `action: webhook`.
+  
+  <Expandable title="Webhook Schema">
+    <ParamField path="webhook.url" type="string" required>
+      HTTP endpoint URL. Rampart sends POST requests with full tool call context.
+      
+      ```yaml
+      webhook:
+        url: "http://localhost:8090/verify"
+      ```
+    </ParamField>
+    
+    <ParamField path="webhook.timeout" type="string" default="5s">
+      Request timeout. Valid units: `s`, `ms`, `m`.
+      
+      ```yaml
+      webhook:
+        url: "http://localhost:8090/verify"
+        timeout: 10s
+      ```
+    </ParamField>
+    
+    <ParamField path="webhook.fail_open" type="boolean" default="true">
+      Allow tool call if webhook is unreachable or times out.
+      
+      - `true` - Allow on error (recommended, prevents webhook downtime from blocking agents)
+      - `false` - Deny on error (stricter, but webhook becomes single point of failure)
+      
+      ```yaml
+      webhook:
+        url: "http://localhost:8090/verify"
+        fail_open: false  # Deny if webhook fails
+      ```
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Webhook Request Format
+
+Rampart sends POST requests with this payload:
+
+```json
+{
+  "tool": "exec",
+  "agent": "claude-code",
+  "session": "myapp/main",
+  "params": {
+    "command": "kubectl apply -f deployment.yaml"
+  },
+  "timestamp": "2026-03-03T14:23:05Z"
+}
+```
+
+### Webhook Response Format
+
+Your endpoint must return JSON with a `decision` field:
+
+```json
+// Allow the call
+{
+  "decision": "allow"
+}
+
+// Deny the call
+{
+  "decision": "deny",
+  "reason": "Intent verification failed: command appears to target production"
+}
+```
+
+### Reference Implementation
+
+See [rampart-verify](https://github.com/peg/rampart-verify) for an LLM-based verification sidecar:
+
+- Uses gpt-4o-mini, Claude Haiku, or local Ollama
+- Classifies ambiguous commands at ~$0.0001/call
+- Handles 95% of decisions via pattern matching, LLM reviews the rest
+
+## Action Priority
+
+When multiple policies match a tool call:
+
+1. **Deny always wins** - If any policy denies, the call is denied
+2. **Priority ordering** - Lower priority number = evaluated first
+3. **First match within policy** - Rules evaluate top-to-bottom
+4. **No match** - `default_action` applies
+
+```yaml
+default_action: allow
+
+policies:
+  # Priority 1 - critical security (evaluated first)
+  - name: block-credentials
+    priority: 1
+    match:
+      tool: ["read"]
+    rules:
+      - action: deny
+        when:
+          path_matches: ["**/.ssh/id_*"]
+  
+  # Priority 10 - monitoring
+  - name: watch-network
+    priority: 10
+    match:
+      tool: ["exec"]
+    rules:
+      - action: watch
+        when:
+          command_matches: ["curl *"]
+  
+  # Priority 100 - default (evaluated last)
+  - name: default-allow
+    priority: 100
+    match:
+      tool: ["exec"]
+    rules:
+      - action: allow
+        when:
+          default: true
+```
+
+## Complete Examples
+
+### Multi-Action Policy
+
+```yaml
+policies:
+  - name: exec-guardrails
+    match:
+      tool: ["exec"]
+    rules:
+      # Deny destructive commands
+      - action: deny
+        when:
+          command_matches:
+            - "rm -rf /"
+            - "mkfs*"
+        message: "Destructive command blocked"
+      
+      # Ask before sudo
+      - action: ask
+        ask:
+          audit: true
+        when:
+          command_contains: ["sudo"]
+        message: "Privileged command requires approval"
+      
+      # Watch network commands
+      - action: watch
+        when:
+          command_matches: ["curl *", "wget *"]
+        message: "Network command logged"
+      
+      # Allow everything else
+      - action: allow
+        when:
+          default: true
+```
+
+### Webhook with Fallback
+
+```yaml
+policies:
+  - name: llm-verify-ambiguous
+    match:
+      tool: ["exec"]
+    rules:
+      # Explicit denies (fast pattern matching)
+      - action: deny
+        when:
+          command_contains: ["rm -rf /"]
+      
+      # LLM verification for ambiguous commands
+      - action: webhook
+        when:
+          command_matches: ["*production*", "*deploy*"]
+        webhook:
+          url: "http://localhost:8090/verify"
+          timeout: 5s
+          fail_open: true
+      
+      # Default allow (if webhook fails or doesn't match)
+      - action: allow
+        when:
+          default: true
+```
+
+### CI/Headless Mode
+
+```yaml
+policies:
+  - name: ci-strict
+    match:
+      tool: ["exec"]
+    rules:
+      # Block in CI, ask in dev
+      - action: ask
+        ask:
+          headless_only: true  # Becomes deny in CI
+          audit: true
+        when:
+          command_matches:
+            - "kubectl apply *"
+            - "terraform apply *"
+        message: "Deployment blocked in CI mode"
+```
+
+## Validation Rules
+
+### Required Fields
+
+- Every rule must have an `action`
+- `action: webhook` requires `webhook.url`
+- If `message` is provided, it must be non-empty
+
+### Action Values
+
+- Valid: `deny`, `allow`, `watch`, `ask`, `webhook`
+- Deprecated but accepted: `log` (alias for `watch`), `require_approval` (alias for `ask` with audit)
+
+### Best Practices
+
+<Card title="Deny First" icon="shield-halved">
+  Place deny rules at the top of your policy for maximum security. Deny always wins.
+</Card>
+
+<Card title="Use Priority" icon="arrow-down-1-9">
+  Assign priority 1 to critical security rules, priority 100 to defaults.
+</Card>
+
+<Card title="Fail Open for Webhooks" icon="door-open">
+  Set `fail_open: true` so webhook downtime doesn't block your agent.
+</Card>
+
+<Card title="Audit Important Approvals" icon="clipboard-list">
+  Enable `ask.audit: true` for deployment and privileged commands.
+</Card>
+
+## Next Steps
+
+- Configure [Webhooks](/schema/webhooks) for external verification
+- Learn about [Match Conditions](/schema/match-conditions)
+- Review [Policy Structure](/schema/policy-structure)

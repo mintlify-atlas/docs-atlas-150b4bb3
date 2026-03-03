@@ -1,0 +1,303 @@
+---
+title: OWASP Coverage
+description: How Rampart maps to OWASP Top 10 for Agentic AI security risks
+---
+
+Rampart provides comprehensive coverage for the OWASP Top 10 security risks identified for AI agents and agentic applications.
+
+## OWASP Top 10 for Agentic AI
+
+Rampart maps to the [OWASP Top 10 Risks for Agentic AI](https://genai.owasp.org/resource/agentic-ai-threats-and-mitigations/):
+
+| # | Risk | Rampart Coverage |
+|---|------|------------------|
+| 1 | **Excessive Agency** | ✅ Policy engine enforces least-privilege per tool call. Deny-wins evaluation, YAML allowlists. |
+| 2 | **Unauthorized Tool Use** | ✅ Every tool call evaluated before execution. `action: deny` blocks, `action: ask` requires human approval. |
+| 3 | **Insecure Tool Implementation** | ✅ Response-side scanning detects credential leaks in tool output (AWS keys, private keys, API tokens). |
+| 4 | **Prompt Injection → Tool Abuse** | ✅ Pattern matching + optional LLM verification ([rampart-verify](https://github.com/peg/rampart-verify)) catches injected commands regardless of prompt origin. |
+| 5 | **Insufficient Audit Trail** | ✅ Hash-chained JSONL audit with SIEM export (syslog/CEF). Tamper-evident, survives partial modification. |
+| 6 | **Inadequate Sandboxing** | 🟡 Rampart is a policy engine, not a sandbox. Complementary to container/VM isolation — use both for defense in depth. |
+| 7 | **Insecure Agent Communication** | ✅ Inter-agent tool calls evaluated by the same policy engine. `agent_depth` conditions limit sub-agent privilege escalation. |
+| 8 | **Data Exfiltration** | ✅ Domain-based blocking (`domain_matches`), credential pattern detection in responses, file path restrictions. |
+| 9 | **Uncontrolled Autonomy** | ✅ `require_approval` and `ask` actions enforce human-in-the-loop for sensitive operations. Approval dashboard with HMAC-signed URLs. |
+| 10 | **Overreliance on AI Decisions** | ✅ All decisions logged with full context. `rampart watch` dashboard and webhook notifications keep humans informed. |
+
+## OWASP Top 10 for Agentic Applications (ASI01–ASI10)
+
+Rampart also maps to the newer [OWASP Top 10 for Agentic Applications](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/), released at Black Hat Europe 2025:
+
+| # | Risk | Rampart Coverage |
+|---|------|------------------|
+| ASI01 | **Agent Goal Hijack** | 🟡 Policy engine limits what a hijacked agent can *do* — deny-wins evaluation contains the blast radius even if the agent's goals are altered. |
+| ASI02 | **Tool Misuse & Exploitation** | ✅ Core purpose. Every tool call evaluated against YAML policies. Parameter validation, command pattern matching, approval workflows for sensitive operations. |
+| ASI03 | **Identity & Privilege Abuse** | 🟡 `agent_depth` conditions limit sub-agent privilege escalation. User separation prevents agents from accessing policies/audit. |
+| ASI04 | **Supply Chain Vulnerabilities** | 🟡 Community policy SHA-256 verification. `rampart mcp scan` auto-generates policy from MCP server tool definitions. Project policies can only add restrictions, not weaken global policy. |
+| ASI05 | **Unexpected Code Execution** | ✅ Shell command normalization, interpreter one-liner blocking, LD_PRELOAD cascade for subprocess interception, pattern matching + optional LLM verification for ambiguous commands. |
+| ASI06 | **Memory & Context Poisoning** | ❌ Out of scope — Rampart operates at the tool call layer, not the memory/RAG layer. Use dedicated guardrails for memory integrity. |
+| ASI07 | **Insecure Inter-Agent Communication** | 🟡 Inter-agent tool calls are evaluated by the same policy engine. `agent_depth` conditions control sub-agent nesting depth. |
+| ASI08 | **Cascading Failures** | 🟡 Fail-open design prevents Rampart from cascading. `call_count` rate limiting throttles runaway agents. Webhook notifications alert on anomalies. |
+| ASI09 | **Human-Agent Trust Exploitation** | ✅ `require_approval` and `ask` actions enforce human-in-the-loop for sensitive operations. HMAC-signed approval URLs. Full audit trail for accountability. |
+| ASI10 | **Rogue Agents** | ✅ Hash-chained audit trail makes rogue behavior detectable and verifiable. Response scanning catches credential exfiltration. Policy engine constrains all agents regardless of intent. |
+
+## Coverage Details
+
+### 1. Excessive Agency (OWASP #1)
+
+**How Rampart Protects:**
+
+- **Deny-wins evaluation** — Any deny from any policy overrides all allows
+- **YAML allowlists** — Define exactly what agents can do with glob patterns
+- **Per-tool policies** — Different rules for `exec`, `read`, `write`, `fetch`
+
+```yaml
+policies:
+  - name: restrict-network
+    match:
+      tool: ["fetch"]
+    rules:
+      - action: deny
+        when:
+          domain_matches:
+            - "*.internal.company.com"
+        message: "Internal network access blocked"
+```
+
+### 2. Unauthorized Tool Use (OWASP #2)
+
+**How Rampart Protects:**
+
+- **Pre-execution evaluation** — Every tool call checked before running
+- **Approval workflows** — Human-in-the-loop for sensitive operations
+- **MCP proxy** — Applies policies to Model Context Protocol servers
+
+```yaml
+policies:
+  - name: require-deployment-approval
+    match:
+      tool: ["exec"]
+    rules:
+      - action: ask
+        when:
+          command_matches:
+            - "kubectl apply **"
+            - "terraform apply **"
+        message: "Deployment requires approval"
+```
+
+### 3. Insecure Tool Implementation (OWASP #3)
+
+**How Rampart Protects:**
+
+- **Response scanning** — Detects credentials in tool output
+- **Pattern matching** — Identifies AWS keys, private keys, API tokens, JWTs
+- **PostToolUse hooks** — Scans responses before they reach the agent
+
+```yaml
+policies:
+  - name: block-credential-leaks
+    match:
+      tool: ["exec", "read"]
+    rules:
+      - action: deny
+        when:
+          response_matches:
+            - "AKIA[0-9A-Z]{16}"  # AWS keys
+            - "-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+            - "ghp_[a-zA-Z0-9]{36}"  # GitHub tokens
+            - "sk-[a-zA-Z0-9]{48}"  # OpenAI keys
+        message: "Sensitive credential detected in response"
+```
+
+### 4. Prompt Injection → Tool Abuse (OWASP #4)
+
+**How Rampart Protects:**
+
+- **Pattern matching** — Catches dangerous commands regardless of how they were generated
+- **Optional LLM verification** — [rampart-verify](https://github.com/peg/rampart-verify) classifies intent
+- **Response monitoring** — Detects injection attempts in tool responses
+
+```yaml
+policies:
+  - name: watch-prompt-injection
+    match:
+      tool: ["fetch", "read"]
+    rules:
+      - action: ask
+        when:
+          response_matches:
+            - "(?i)ignore (all |your |previous )instructions"
+            - "(?i)your new instructions (is|are)"
+            - "(?i)<\\|im_start\\|>system"
+        message: "Possible prompt injection detected — approval required"
+```
+
+### 5. Insufficient Audit Trail (OWASP #5)
+
+**How Rampart Protects:**
+
+- **Hash-chained audit** — Each entry includes SHA-256 of previous entry
+- **Tamper detection** — `rampart audit verify` checks chain integrity
+- **SIEM export** — RFC 5424 syslog or Common Event Format (CEF)
+
+```bash
+# Verify audit integrity
+rampart audit verify
+
+# Export to SIEM
+rampart serve --syslog localhost:514 --cef
+
+# Search audit trail
+rampart audit search --decision deny --tool exec
+```
+
+### 6. Inadequate Sandboxing (OWASP #6)
+
+<Warning>
+Rampart is a policy engine, not a sandbox. For full isolation, use Rampart **in combination with** containers, VMs, or mandatory access control (SELinux, AppArmor).
+</Warning>
+
+**What Rampart Provides:**
+
+- Policy enforcement at the tool call boundary
+- Prevents dangerous operations from executing
+- Complements OS-level sandboxing
+
+**What You Still Need:**
+
+- Container isolation (Docker, Podman)
+- Virtual machines for untrusted workloads
+- Network segmentation
+- Mandatory access control (SELinux, AppArmor, seccomp)
+
+### 7. Insecure Agent Communication (OWASP #7)
+
+**How Rampart Protects:**
+
+- **Inter-agent evaluation** — Sub-agent tool calls go through the same policy engine
+- **Depth limiting** — `agent_depth` conditions prevent deep nesting
+- **Session tracking** — Each agent interaction tagged with session ID
+
+```yaml
+policies:
+  - name: limit-sub-agents
+    rules:
+      - action: deny
+        when:
+          agent_depth:
+            gte: 3
+        message: "Sub-agent nesting depth exceeded"
+```
+
+### 8. Data Exfiltration (OWASP #8)
+
+**How Rampart Protects:**
+
+- **Domain blocking** — Denies access to known exfiltration services
+- **Credential protection** — Blocks reads of SSH keys, cloud credentials, tokens
+- **Network restrictions** — `/dev/tcp` and `/dev/udp` redirects blocked
+
+```yaml
+policies:
+  - name: block-exfil-domains
+    match:
+      tool: ["fetch"]
+    rules:
+      - action: deny
+        when:
+          domain_matches:
+            - "*.ngrok.io"
+            - "*.requestbin.com"
+            - "webhook.site"
+        message: "Potential data exfiltration domain blocked"
+```
+
+### 9. Uncontrolled Autonomy (OWASP #9)
+
+**How Rampart Protects:**
+
+- **Approval actions** — `action: ask` requires human decision
+- **HMAC-signed URLs** — Secure approve/deny links in webhook notifications
+- **Multiple approval channels** — Native prompts, dashboard, CLI, webhooks
+
+```yaml
+policies:
+  - name: require-privileged-approval
+    match:
+      tool: ["exec"]
+    rules:
+      - action: ask
+        when:
+          command_matches:
+            - "sudo **"
+        message: "sudo requires approval"
+```
+
+### 10. Overreliance on AI Decisions (OWASP #10)
+
+**How Rampart Protects:**
+
+- **Full context logging** — Every decision includes agent, session, command, policy matched
+- **Live dashboard** — `rampart watch` shows real-time activity
+- **Webhook notifications** — Immediate alerts on denials
+- **Audit search** — Query by tool, decision, time range
+
+```bash
+# Live monitoring
+rampart watch
+
+# Decision breakdown
+rampart audit stats
+
+# Search for denied exec calls
+rampart audit search --decision deny --tool exec --since 2026-03-01
+```
+
+## Integration-Specific Coverage
+
+| Integration | Exec Coverage | File Coverage | Response Scanning | Cascade |
+|-------------|--------------|---------------|-------------------|---------||
+| Native hooks (Claude Code) | ✅ | ✅ (via hooks) | ✅ PostToolUse | ❌ |
+| Native hooks (Cline) | ✅ | ✅ (via hooks) | ❌ | ❌ |
+| `rampart wrap` | ✅ | ❌ | ❌ | ✅ LD_PRELOAD |
+| `rampart preload` | ✅ | ❌ | ❌ | ✅ LD_PRELOAD |
+| `rampart setup openclaw --patch-tools` | ✅ (shim) | ✅ (patched) | ❌ | ❌ |
+| HTTP proxy | ✅ | ✅ | ✅ | ❌ |
+| MCP proxy | ✅ | ✅ | ✅ | ❌ |
+
+## Platform-Specific Coverage
+
+### macOS
+
+v0.4.4+ includes macOS-specific built-in policies:
+
+- **Keychain access protection** — Blocks `security dump-keychain`, credential extraction
+- **Gatekeeper bypass prevention** — Blocks `spctl --master-disable`
+- **SIP protection** — Blocks `csrutil disable`
+- **LaunchAgent persistence** — Blocks `launchctl load` for auto-start
+- **User management** — Blocks `dscl` user/password manipulation
+- **AppleScript shell execution** — Blocks `osascript` with `do shell script`
+
+### Windows
+
+v0.6.6+ includes Windows-specific built-in policies:
+
+- **Registry persistence** — Blocks Run key modifications
+- **Credential dumping** — Blocks SAM/SYSTEM/SECURITY registry access, `vssadmin`
+- **Download cradles** — Blocks `IEX (IWR ...)`, `certutil -urlcache`
+- **Reverse shells** — Blocks PowerShell socket patterns, encoded commands
+- **Boot config** — Blocks `bcdedit`, `bootrec`
+- **Execution policy** — Requires approval for `-ExecutionPolicy Bypass`
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Security Recommendations" icon="shield-halved" href="/security/recommendations">
+    Best practices for production deployments
+  </Card>
+  <Card title="Self-Modification Protection" icon="lock" href="/security/self-modification-protection">
+    How Rampart prevents agents from modifying policies
+  </Card>
+  <Card title="Writing Policies" icon="file-code" href="/policies/writing-policies">
+    Create custom policies for your environment
+  </Card>
+</CardGroup>

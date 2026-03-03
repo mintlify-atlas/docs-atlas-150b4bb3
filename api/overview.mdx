@@ -1,0 +1,132 @@
+---
+title: 'HTTP API Overview'
+description: 'Rampart HTTP API overview, base URL, and conventions'
+---
+
+## Overview
+
+Rampart exposes a local HTTP API for policy evaluation, approval workflows, policy introspection, audit history, and operational monitoring.
+
+<Info>
+The API is designed for local use only — it binds to `127.0.0.1` by default and should not be exposed to external networks.
+</Info>
+
+## Base URL
+
+Default listen address: `http://127.0.0.1:9090`
+
+The port is configurable via the `--port` flag when starting `rampart serve`:
+
+```bash
+rampart serve --port 8080
+```
+
+## API Conventions
+
+### Content Type
+
+All JSON APIs use:
+- Request: `Content-Type: application/json`
+- Response: `Content-Type: application/json`
+
+### Request Limits
+
+Maximum request body size: **1 MiB** (`1048576` bytes)
+
+### Authentication
+
+Most endpoints require a bearer token.
+
+**Header format:**
+```http
+Authorization: Bearer <token>
+```
+
+**Token location:**
+- File: `~/.rampart/token`
+- Environment: `RAMPART_TOKEN` (in many workflows)
+
+**Example:**
+```bash
+TOKEN="$(cat ~/.rampart/token)"
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:9090/v1/status
+```
+
+### Authentication Notes
+
+<Note>
+- `GET /healthz` does **not** require authentication
+- `GET /v1/events/stream` accepts either bearer auth or `?token=<token>` query parameter
+- `POST /v1/approvals/{id}/resolve` may also be authorized by signed URL query params (`sig`, `exp`) when server-side signing is enabled
+</Note>
+
+### Error Response Format
+
+All errors return JSON with an `error` field:
+
+```json
+{
+  "error": "error description"
+}
+```
+
+### Common HTTP Status Codes
+
+| Status Code | Meaning |
+|-------------|----------|
+| `200 OK` | Request successful |
+| `201 Created` | Resource created successfully |
+| `202 Accepted` | Approval required; request queued |
+| `400 Bad Request` | Invalid request body or parameters |
+| `401 Unauthorized` | Missing or invalid bearer token |
+| `403 Forbidden` | Denied in enforce mode |
+| `404 Not Found` | Resource not found |
+| `410 Gone` | Approval already resolved (replay attempt) |
+| `429 Too Many Requests` | Rate limited |
+| `500 Internal Server Error` | Server error |
+| `503 Service Unavailable` | Service temporarily unavailable |
+
+### Decision Values
+
+Common decision/action values across responses:
+
+- `allow` — Tool call permitted
+- `deny` — Tool call blocked
+- `watch` — Tool call permitted but logged
+- `ask` — Human approval required
+- `require_approval` — Alias for `ask` (legacy)
+- `approved` — Approval granted (audit context)
+- `denied` — Approval denied (audit context)
+- `always_allowed` — Persisted approval (audit context)
+
+## API Groups
+
+The Rampart HTTP API is organized into the following groups:
+
+### Tool Evaluation
+- [Tool Evaluation](/api/tool-evaluation) — Execute and evaluate tool calls
+- [Preflight](/api/preflight) — Dry-run policy checks
+
+### Approvals
+- [Approvals](/api/approvals) — Manage pending approvals
+
+### Monitoring
+- [Events](/api/events) — Real-time event stream
+- [Status](/api/status) — Server status and health
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="key" href="/api/authentication">
+    Learn about bearer token authentication
+  </Card>
+  <Card title="Tool Evaluation" icon="gavel" href="/api/tool-evaluation">
+    Evaluate tool calls against policies
+  </Card>
+  <Card title="Approvals" icon="check-circle" href="/api/approvals">
+    Manage approval workflows
+  </Card>
+  <Card title="Events" icon="bolt" href="/api/events">
+    Real-time event streaming
+  </Card>
+</CardGroup>

@@ -1,0 +1,438 @@
+---
+title: Self-Modification Protection
+description: How Rampart prevents AI agents from modifying their own security policies
+---
+
+Rampart includes built-in protections to prevent AI agents from weakening or bypassing their own security constraints.
+
+## The Problem
+
+AI agents have access to shell commands. Without protection, an agent could:
+
+- Run `rampart allow "rm -rf /"` to permit destructive commands
+- Run `rampart block "sudo **"` with `--remove` to remove privilege restrictions
+- Edit `~/.rampart/policies/custom.yaml` to weaken security rules
+- Redirect output to `.rampart/` config files to tamper with policies
+
+<Warning>
+Self-modification is the #1 policy bypass vector for AI agents. Rampart blocks all self-modification attempts by default.
+</Warning>
+
+## How Rampart Protects
+
+The standard policy includes a `block-self-modification` rule that prevents agents from modifying policies through multiple attack vectors.
+
+### 1. Direct Command Blocking
+
+Blocks direct invocations of policy modification commands:
+
+```yaml
+policies:
+  - name: block-self-modification
+    description: "Prevent AI agents from modifying their own Rampart policy"
+    match:
+      tool: ["exec"]
+    rules:
+      # Substring matching catches ALL shell wrapper bypasses
+      - action: deny
+        when:
+          command_contains:
+            - "rampart allow"
+            - "rampart block"
+            - "rampart rules"
+            - "rampart policy generate"
+            - "rampart init"
+        message: "Policy modification commands must be run by a human, not an agent"
+```
+
+**What this blocks:**
+
+```bash
+# Direct invocation
+rampart allow "curl * | bash"
+
+# Absolute path
+/usr/local/bin/rampart allow "dangerous-command"
+
+# Relative path
+./rampart allow "dangerous-command"
+
+# Global flags before subcommand
+rampart --config custom.yaml allow "dangerous-command"
+```
+
+### 2. Shell Wrapper Bypasses
+
+Substring matching catches attempts to wrap policy commands in shell interpreters:
+
+```yaml
+- action: deny
+  when:
+    command_contains:
+      - "rampart allow"
+      - "rampart block"
+      - "rampart rules"
+  message: "Policy modification commands must be run by a human, not an agent"
+```
+
+**What this blocks:**
+
+```bash
+# Shell wrappers
+bash -c "rampart allow 'dangerous-command'"
+sh -c "rampart allow 'dangerous-command'"
+
+# Command substitution
+$(rampart allow "dangerous-command")
+`rampart allow "dangerous-command"`
+
+# Eval
+eval "rampart allow 'dangerous-command'"
+
+# Environment variable prefix
+FOO=bar rampart allow "dangerous-command"
+```
+
+### 3. Shell Redirect Protection
+
+Blocks shell redirects that write to `.rampart/` directories:
+
+```yaml
+- action: deny
+  when:
+    command_contains:
+      - "> .rampart/"
+      - "> ~/.rampart/"
+      - ">> .rampart/"
+      - ">> ~/.rampart/"
+      - "| tee .rampart/"
+      - "| tee ~/.rampart/"
+      - "> $HOME/.rampart/"
+      - ">> $HOME/.rampart/"
+      - "| tee $HOME/.rampart/"
+  message: "Writing to Rampart config directory via shell redirect blocked"
+```
+
+**What this blocks:**
+
+```bash
+# Overwrite config
+echo "default_action: allow" > ~/.rampart/policies/custom.yaml
+
+# Append permissive rule
+echo "  - action: allow" >> ~/.rampart/policies/custom.yaml
+
+# Tee to config
+cat malicious-policy.yaml | tee ~/.rampart/policies/custom.yaml
+
+# Environment variable expansion
+echo "permissive rule" > $HOME/.rampart/policies/custom.yaml
+```
+
+### 4. File Tool Protection
+
+Blocks write and edit operations targeting Rampart config:
+
+```yaml
+policies:
+  - name: block-sensitive-writes
+    match:
+      tool: ["write", "edit"]
+    rules:
+      - action: deny
+        when:
+          path_matches:
+            - "**/.rampart/**"
+        message: "Write to sensitive path blocked"
+```
+
+**What this blocks:**
+
+- `Write` tool calls with `filePath: "/home/user/.rampart/policies/custom.yaml"`
+- `Edit` tool calls modifying policy files
+- Any file operation targeting the `.rampart/` directory
+
+## Real-World Examples
+
+### Example 1: Direct Policy Modification
+
+**Agent attempts:**
+
+```bash
+rampart allow "curl * | bash"
+```
+
+**Rampart blocks:**
+
+```
+🔴 Policy modification commands must be run by a human, not an agent
+   Matched: block-self-modification
+```
+
+### Example 2: Shell Wrapper Bypass
+
+**Agent attempts:**
+
+```bash
+bash -c 'rampart allow "rm -rf /"'
+```
+
+**Rampart blocks:**
+
+```
+🔴 Policy modification commands must be run by a human, not an agent
+   Matched: block-self-modification
+   Pattern: command_contains "rampart allow"
+```
+
+The substring matcher catches `rampart allow` inside the `bash -c` wrapper.
+
+### Example 3: Config File Tampering
+
+**Agent attempts:**
+
+```bash
+echo "default_action: allow" > ~/.rampart/policies/custom.yaml
+```
+
+**Rampart blocks:**
+
+```
+🔴 Writing to Rampart config directory via shell redirect blocked
+   Matched: block-self-modification
+   Pattern: command_contains "> ~/.rampart/"
+```
+
+### Example 4: File Tool Modification
+
+**Agent attempts:**
+
+```json
+{
+  "tool_name": "Write",
+  "tool_input": {
+    "filePath": "/home/user/.rampart/policies/custom.yaml",
+    "content": "default_action: allow\npolicies: []"
+  }
+}
+```
+
+**Rampart blocks:**
+
+```
+🔴 Write to sensitive path blocked
+   Matched: block-sensitive-writes
+   Path: /home/user/.rampart/policies/custom.yaml
+```
+
+## Pattern Coverage
+
+The self-modification protection uses **multiple defense layers** to ensure comprehensive coverage:
+
+### Layer 1: Substring Matching (Primary Defense)
+
+```yaml
+command_contains:
+  - "rampart allow"
+  - "rampart block"
+  - "rampart rules"
+```
+
+- **Catches:** All shell wrapper bypasses (`bash -c`, `sh -c`, `eval`, etc.)
+- **Simple but robust** — No complex glob patterns needed
+- **Case-insensitive** — Detects uppercase/mixed-case variants
+
+### Layer 2: Glob Patterns (Explicit Coverage)
+
+```yaml
+command_matches:
+  - "rampart allow *"
+  - "*/rampart allow *"
+  - "./rampart allow *"
+  - "rampart --* allow *"
+```
+
+- **Catches:** Direct invocations, absolute paths, relative paths, global flags
+- **Kept for compatibility and explicitness**
+- **Complements substring matching**
+
+### Layer 3: File Tool Blocking
+
+```yaml
+path_matches:
+  - "**/.rampart/**"
+```
+
+- **Catches:** Write and Edit tool calls targeting config directories
+- **Protects:** Policy files, audit logs, token files
+
+## User Separation: The Ultimate Protection
+
+<Warning>
+Even with self-modification blocking, an agent running as the same user as Rampart can still access config files directly if Rampart crashes or is disabled.
+</Warning>
+
+**For production deployments, use user separation:**
+
+```bash
+# Create a service account
+sudo useradd -r -s /usr/sbin/nologin rampart
+
+# Move config to protected location
+sudo mkdir -p /etc/rampart /var/lib/rampart/audit
+sudo cp ~/.rampart/policies/*.yaml /etc/rampart/
+sudo chown -R rampart:rampart /etc/rampart /var/lib/rampart
+sudo chmod 700 /etc/rampart /var/lib/rampart/audit
+
+# Run serve as the rampart user
+rampart serve --config /etc/rampart/standard.yaml --audit-dir /var/lib/rampart/audit
+```
+
+With user separation:
+
+- **Agent cannot read** policy files (owned by `rampart` user)
+- **Agent cannot write** to config directories (no permissions)
+- **Agent cannot modify** audit logs (separate user ownership)
+- **Agent still works normally** — communicates over HTTP on localhost
+
+See [Security Recommendations](/security/recommendations#user-separation) for detailed setup.
+
+## Verification
+
+Test self-modification protection with `rampart test`:
+
+```bash
+# Test direct invocation
+rampart test "rampart allow 'dangerous-command'"
+# → deny: Policy modification commands must be run by a human
+
+# Test shell wrapper
+rampart test "bash -c 'rampart allow dangerous-command'"
+# → deny: Policy modification commands must be run by a human
+
+# Test shell redirect
+rampart test "echo permissive > ~/.rampart/policies/custom.yaml"
+# → deny: Writing to Rampart config directory via shell redirect blocked
+```
+
+## Policy Reference
+
+The complete `block-self-modification` policy from `standard.yaml`:
+
+```yaml
+policies:
+  - name: block-self-modification
+    description: "Prevent AI agents from modifying their own Rampart policy"
+    match:
+      tool: ["exec"]
+    rules:
+      # Substring matching catches ALL shell wrapper bypasses
+      - action: deny
+        when:
+          command_contains:
+            - "rampart allow"
+            - "rampart block"
+            - "rampart rules"
+            - "rampart policy generate"
+            - "rampart init"
+        message: "Policy modification commands must be run by a human, not an agent"
+      
+      # Block shell redirects writing to .rampart directory
+      - action: deny
+        when:
+          command_contains:
+            - "> .rampart/"
+            - "> ~/.rampart/"
+            - ">> .rampart/"
+            - ">> ~/.rampart/"
+            - ">>.rampart/"
+            - ">>~/.rampart/"
+            - "| tee .rampart/"
+            - "| tee ~/.rampart/"
+            - "> $HOME/.rampart/"
+            - ">> $HOME/.rampart/"
+            - "| tee $HOME/.rampart/"
+        message: "Writing to Rampart config directory via shell redirect blocked"
+      
+      # Glob patterns for direct invocations
+      - action: deny
+        when:
+          command_matches:
+            - "rampart allow *"
+            - "rampart block *"
+            - "rampart rules *"
+            - "*/rampart allow *"
+            - "*/rampart block *"
+            - "./rampart allow *"
+            - "rampart --* allow *"
+        message: "Policy modification commands must be run by a human, not an agent"
+```
+
+File tool protection:
+
+```yaml
+policies:
+  - name: block-sensitive-writes
+    match:
+      tool: ["write", "edit"]
+    rules:
+      - action: deny
+        when:
+          path_matches:
+            - "**/.rampart/**"
+        message: "Write to sensitive path blocked"
+```
+
+## Known Limitations
+
+### 1. Same-User File Access
+
+If the agent runs as the same user as Rampart:
+
+- **Protected:** Shell commands and tool calls (evaluated before execution)
+- **Not protected:** Direct file I/O if Rampart crashes or is bypassed
+- **Mitigation:** Use user separation (see above)
+
+### 2. Root/Admin Access
+
+If the agent runs as root or has unrestricted sudo:
+
+- **Protected:** Normal commands
+- **Not protected:** `sudo` commands that modify Rampart files
+- **Mitigation:** Run agents as unprivileged users, restrict `sudo` to specific commands
+
+### 3. Custom Policies
+
+If you write custom policies that override the standard policy:
+
+```yaml
+# BAD - weakens self-modification protection
+policies:
+  - name: allow-self-modification  # Don't do this!
+    priority: 1
+    match:
+      tool: ["exec"]
+    rules:
+      - action: allow
+        when:
+          command_matches:
+            - "rampart allow *"
+```
+
+<Warning>
+Never create policies that weaken self-modification protection. The standard policy's deny rules should always take precedence.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Security Recommendations" icon="shield-halved" href="/security/recommendations">
+    Set up user separation for maximum protection
+  </Card>
+  <Card title="OWASP Coverage" icon="shield-check" href="/security/owasp-coverage">
+    See how Rampart maps to OWASP Top 10 for Agentic AI
+  </Card>
+  <Card title="Writing Policies" icon="file-code" href="/policies/writing-policies">
+    Create custom policies without weakening security
+  </Card>
+</CardGroup>

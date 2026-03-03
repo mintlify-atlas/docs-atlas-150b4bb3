@@ -1,0 +1,264 @@
+---
+title: Installation
+description: Install Rampart on macOS, Linux, or Windows
+---
+
+## One-line install
+
+The fastest way to install Rampart:
+
+<CodeGroup>
+```bash macOS & Linux
+curl -fsSL https://rampart.sh/install | bash
+```
+
+```powershell Windows
+irm https://rampart.sh/install.ps1 | iex
+```
+</CodeGroup>
+
+<Note>
+The curl installer drops the binary in `~/.local/bin` and runs `rampart quickstart` automatically.
+</Note>
+
+### Pin a specific version
+
+By default, the installer downloads the latest release. To pin a specific version:
+
+```bash
+RAMPART_VERSION=v0.7.0 curl -fsSL https://rampart.sh/install | bash
+```
+
+## Alternative installation methods
+
+<Tabs>
+  <Tab title="Homebrew">
+    Install via Homebrew (macOS and Linux):
+
+    ```bash
+    brew install peg/rampart/rampart
+    ```
+
+    <Note>
+    After installing via Homebrew, run `rampart quickstart` to set up the background service and agent hooks.
+    </Note>
+  </Tab>
+
+  <Tab title="Go install">
+    Install from source using Go 1.24+:
+
+    ```bash
+    go install github.com/peg/rampart/cmd/rampart@latest
+    ```
+
+    <Warning>
+    Make sure `$GOPATH/bin` is in your `PATH`. The default is `~/go/bin`.
+    </Warning>
+
+    After installing, run `rampart quickstart` to complete setup.
+  </Tab>
+
+  <Tab title="Download binary">
+    Download pre-built binaries from [GitHub Releases](https://github.com/peg/rampart/releases):
+
+    <Steps>
+      <Step title="Download the binary for your platform">
+        Available platforms:
+        - `rampart-linux-amd64`
+        - `rampart-linux-arm64`
+        - `rampart-darwin-amd64` (Intel Mac)
+        - `rampart-darwin-arm64` (Apple Silicon)
+        - `rampart_*_windows_amd64.zip` (Windows)
+      </Step>
+
+      <Step title="Verify the checksum">
+        Download the corresponding `.sha256` file and verify:
+
+        ```bash
+        # Linux
+        sha256sum -c rampart-linux-amd64.sha256
+
+        # macOS
+        shasum -a 256 -c rampart-darwin-arm64.sha256
+        ```
+      </Step>
+
+      <Step title="Install to PATH">
+        ```bash
+        # Linux/macOS
+        chmod +x rampart-*
+        mv rampart-* ~/.local/bin/rampart
+
+        # Or install globally (requires sudo)
+        sudo mv rampart-* /usr/local/bin/rampart
+        ```
+
+        For Windows, extract the ZIP and add the directory to your PATH.
+      </Step>
+    </Steps>
+
+    After installing, run `rampart quickstart` to complete setup.
+  </Tab>
+
+  <Tab title="Build from source">
+    Build Rampart from source:
+
+    ```bash
+    git clone https://github.com/peg/rampart.git
+    cd rampart
+    go build -o rampart ./cmd/rampart
+    ```
+
+    Requires Go 1.24+.
+
+    <Tip>
+    Run `go test ./...` to verify your build.
+    </Tip>
+
+    Move the binary to a directory in your PATH:
+
+    ```bash
+    mv rampart ~/.local/bin/
+    ```
+
+    Then run `rampart quickstart` to complete setup.
+  </Tab>
+</Tabs>
+
+## Verify installation
+
+Check that Rampart is installed correctly:
+
+```bash
+rampart version
+```
+
+You should see output like:
+
+```
+rampart v0.7.0 (commit abc1234)
+```
+
+## Platform-specific notes
+
+<AccordionGroup>
+  <Accordion title="macOS: SIP restrictions">
+    macOS System Integrity Protection (SIP) blocks `LD_PRELOAD` for binaries in `/usr/bin/`. This doesn't affect AI agents, which typically live in:
+    - Homebrew: `/opt/homebrew/bin/` or `/usr/local/bin/`
+    - nvm: `~/.nvm/versions/node/`
+    - pyenv: `~/.pyenv/versions/`
+    - cargo: `~/.cargo/bin/`
+
+    `rampart preload` works fine with these.
+  </Accordion>
+
+  <Accordion title="Linux: systemd service">
+    The install script sets up a systemd user service:
+
+    ```bash
+    # Check service status
+    systemctl --user status rampart-serve
+
+    # View logs
+    journalctl --user -u rampart-serve -f
+
+    # Restart service
+    systemctl --user restart rampart-serve
+    ```
+
+    The service starts automatically on boot.
+  </Accordion>
+
+  <Accordion title="Windows: PowerShell execution policy">
+    If you get an error running the install script, you may need to allow script execution:
+
+    ```powershell
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+    ```
+
+    This only affects the current user and doesn't require admin rights.
+
+    After installation, Rampart is added to your user PATH at `~/.rampart/bin`.
+  </Accordion>
+
+  <Accordion title="PATH configuration">
+    If `rampart` isn't found after installation, add the install directory to your PATH:
+
+    <CodeGroup>
+    ```bash bash/zsh
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+    source ~/.bashrc
+    ```
+
+    ```bash fish
+    set -Ux fish_user_paths $HOME/.local/bin $fish_user_paths
+    ```
+
+    ```powershell PowerShell (Windows)
+    # Already done by the installer
+    # If needed manually:
+    $env:PATH = "$env:USERPROFILE\.rampart\bin;$env:PATH"
+    ```
+    </CodeGroup>
+  </Accordion>
+</AccordionGroup>
+
+## What's installed
+
+The installation process:
+
+1. **Downloads the binary** to `~/.local/bin/rampart` (or `~/.rampart/bin/rampart.exe` on Windows)
+2. **Verifies the SHA-256 checksum** to ensure integrity
+3. **Adds to PATH** (on Windows, updates user PATH environment variable)
+4. **Runs `rampart quickstart`** to set up the background service and detect agents
+
+<Note>
+The one-line installer runs `rampart quickstart` automatically. If you install via Homebrew or Go, you'll need to run `rampart quickstart` manually.
+</Note>
+
+## Upgrading
+
+Upgrade to the latest version:
+
+```bash
+rampart upgrade
+```
+
+This downloads the latest binary and refreshes built-in policies. Your custom rules in `~/.rampart/policies/custom.yaml` are never overwritten.
+
+<Tip>
+To upgrade without updating policies:
+
+```bash
+rampart upgrade --no-policy-update
+```
+</Tip>
+
+## Uninstalling
+
+Remove Rampart completely:
+
+```bash
+rampart uninstall
+```
+
+This removes:
+- The binary
+- Background service (systemd/launchd)
+- Agent hooks
+- Configuration and audit logs (after confirmation)
+
+<Warning>
+Uninstalling removes all audit logs by default. Back up `~/.rampart/audit/` if you need to keep them.
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Set up Rampart for your agent in under 2 minutes
+  </Card>
+  <Card title="Agent integration" icon="plug" href="/integrations/overview">
+    See detailed setup instructions for your specific agent
+  </Card>
+</CardGroup>

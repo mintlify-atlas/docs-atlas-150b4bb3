@@ -1,0 +1,350 @@
+---
+title: rampart doctor
+description: Health check for Rampart installation
+---
+
+Diagnostic tool that checks your Rampart installation and reports any issues.
+
+## Usage
+
+```bash
+rampart doctor [flags]
+```
+
+## Flags
+
+<ParamField path="--json" type="boolean" default="false">
+  Output results as JSON (for CI/automation)
+</ParamField>
+
+## What it checks
+
+### 1. Version
+
+✓ Verifies rampart binary version and Go runtime
+
+**Checks:**
+- Binary version (e.g. v0.7.0)
+- Go version (e.g. go1.24.0)
+- Latest version available (warns if outdated)
+
+### 2. PATH
+
+✓ Ensures `rampart` is in system PATH
+
+**Checks:**
+- `which rampart` succeeds
+- Hooks can find the binary
+
+**Fix if failing:**
+```bash
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+### 3. Token
+
+✓ Verifies bearer token exists
+
+**Checks:**
+- `RAMPART_TOKEN` env var, or
+- `~/.rampart/token` file
+
+**Fix if failing:**
+```bash
+rampart serve install  # generates and saves token
+```
+
+### 4. Policies
+
+✓ Confirms policy files exist and are valid
+
+**Checks:**
+- `~/.rampart/policies/` directory exists
+- At least one `.yaml` file present
+- Policies parse without errors
+
+**Fix if failing:**
+```bash
+rampart init --profile standard
+```
+
+### 5. Hook binary path
+
+✓ Verifies hook commands use valid binary paths
+
+**Checks:**
+- Absolute paths in settings.json exist
+- No broken symlinks
+
+**Fix if failing:**
+```bash
+rampart setup claude-code --force
+```
+
+### 6. Hooks installed
+
+✓ Detects installed agent integrations
+
+**Checks:**
+- Claude Code: `~/.claude/settings.json` has rampart hooks
+- Cline: `~/.config/Cline/settings.json` has rampart hooks
+- OpenClaw: `~/.local/bin/rampart-shim` exists
+
+**Fix if failing:**
+```bash
+rampart setup claude-code  # or cline, openclaw
+```
+
+### 7. Audit directory
+
+✓ Ensures audit directory exists and is writable
+
+**Checks:**
+- `~/.rampart/audit/` exists
+- Directory is writable
+- Contains `.jsonl` files (warning if empty)
+
+**Fix if failing:**
+```bash
+mkdir -p ~/.rampart/audit
+chmod 700 ~/.rampart/audit
+```
+
+### 8. Server running
+
+✓ Checks if `rampart serve` is reachable
+
+**Checks:**
+- `http://localhost:9090/healthz` responds
+- Service is running (systemd/launchd)
+
+**Fix if failing:**
+```bash
+rampart serve install
+```
+
+### 9. Token auth
+
+✓ Verifies token authenticates successfully
+
+**Checks:**
+- Token is accepted by serve API
+- API returns 200 OK
+
+**Fix if failing:**
+```bash
+rampart token rotate
+```
+
+### 10. Policies via API
+
+✓ Confirms serve has loaded policies
+
+**Checks:**
+- API returns policy count > 0
+- No policy load errors
+
+### 11. Pending approvals
+
+⚠ Lists pending approvals (warning, not error)
+
+**Checks:**
+- Queries `/v1/approvals` endpoint
+- Reports count if > 0
+
+### 12. System info
+
+✓ Reports OS and architecture
+
+**Info:**
+- OS: linux, darwin, windows
+- Arch: amd64, arm64
+
+### 13. Project policy
+
+ℹ️ Detects project-specific policy (informational)
+
+**Checks:**
+- `.rampart/policy.yaml` in current directory
+- Reports if found (not an error)
+
+## Output
+
+### Success (colored)
+
+```
+🩺 Rampart Doctor
+
+✓ Version: v0.7.0 (go1.24.0)
+✓ PATH: rampart found in PATH
+✓ Token: token found in ~/.rampart/token
+✓ Policies: 3 policy files found
+✓ Hook binary: /usr/local/bin/rampart (valid)
+✓ Hooks: Claude Code hooks installed
+✓ Audit: directory exists and is writable
+✓ Server: running on http://localhost:9090
+✓ Token auth: authenticated successfully
+✓ Policies (API): 3 policies loaded
+✓ System: linux/amd64
+ℹ️ Project policy: found .rampart/policy.yaml
+
+No issues found.
+```
+
+### Failures (colored)
+
+```
+🩺 Rampart Doctor
+
+✓ Version: v0.7.0 (go1.24.0)
+✓ PATH: rampart found in PATH
+✗ Token: no token found
+    💡 Try this: rampart serve install
+✓ Policies: 3 policy files found
+✗ Hooks: no Claude Code hooks found
+    💡 Try this: rampart setup claude-code
+✓ Audit: directory exists and is writable
+✗ Server: not running on http://localhost:9090
+    💡 Try this: rampart serve install
+✓ System: linux/amd64
+
+3 issues found. Run 'rampart setup' to fix hook installation.
+```
+
+### JSON output
+
+```bash
+rampart doctor --json
+```
+
+```json
+{
+  "checks": [
+    {
+      "name": "Version",
+      "status": "ok",
+      "message": "v0.7.0 (go1.24.0)"
+    },
+    {
+      "name": "PATH",
+      "status": "ok",
+      "message": "rampart found in PATH"
+    },
+    {
+      "name": "Token",
+      "status": "fail",
+      "message": "no token found",
+      "hint": "rampart serve install"
+    },
+    {
+      "name": "Hooks",
+      "status": "fail",
+      "message": "no Claude Code hooks found",
+      "hint": "rampart setup claude-code"
+    }
+  ],
+  "issues": 2,
+  "warnings": 0
+}
+```
+
+## Examples
+
+### Basic check
+
+```bash
+rampart doctor
+```
+
+### CI integration
+
+```bash
+#!/bin/bash
+rampart doctor --json > doctor.json
+if [ $? -ne 0 ]; then
+  echo "Rampart health check failed"
+  cat doctor.json | jq '.checks[] | select(.status == "fail")'
+  exit 1
+fi
+```
+
+### Fix all issues
+
+```bash
+# Run doctor to see issues
+rampart doctor
+
+# Follow hints to fix
+rampart serve install
+rampart setup claude-code
+rampart init --profile standard
+
+# Verify fixed
+rampart doctor
+```
+
+## Exit codes
+
+- `0` - No issues found
+- `1` - Issues found (check output for details)
+
+**Note:** Warnings (e.g. pending approvals) do NOT cause exit 1.
+
+## Troubleshooting
+
+### Doctor fails to run
+
+**Check rampart is installed:**
+```bash
+which rampart
+rampart --version
+```
+
+### Too many issues
+
+**Start fresh:**
+```bash
+rampart quickstart
+```
+
+This runs doctor at the end to verify everything.
+
+### JSON output malformed
+
+**Ensure no extra output:**
+```bash
+rampart doctor --json 2>/dev/null
+```
+
+## When to run
+
+**After installation:**
+```bash
+rampart quickstart  # includes doctor
+# or
+rampart doctor
+```
+
+**After upgrading:**
+```bash
+rampart upgrade
+rampart doctor
+```
+
+**When hooks stop working:**
+```bash
+rampart doctor
+# Follow hints to fix issues
+```
+
+**In CI:**
+```bash
+# Verify Rampart is correctly configured
+rampart doctor --json
+```
+
+## See also
+
+- [rampart quickstart](/cli/quickstart) - Automated setup with health check
+- [rampart setup](/cli/setup) - Fix hook installation
+- [rampart serve](/cli/serve) - Fix server issues

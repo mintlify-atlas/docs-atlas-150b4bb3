@@ -1,0 +1,240 @@
+---
+title: rampart setup
+description: Set up Rampart integrations with AI agents
+---
+
+Installs Rampart hooks for supported AI coding agents.
+
+## Usage
+
+```bash
+rampart setup [agent]
+rampart setup [agent] [flags]
+```
+
+## Supported agents
+
+### Claude Code
+
+```bash
+rampart setup claude-code
+```
+
+Installs PreToolUse and PostToolUseFailure hooks in `~/.claude/settings.json`. Covers ALL tools: Bash, Read, Write, Edit, Fetch, Task, and any future tools.
+
+**What it does:**
+- Adds wildcard hook matcher (`.*`) to intercept all tool calls
+- Configures `rampart hook` as the hook command
+- Preserves existing settings (safe to run multiple times)
+- Auto-discovers token from `~/.rampart/token`
+
+**After setup:**
+```bash
+# Just run claude normally
+claude
+```
+
+No wrapper needed - Claude Code natively routes all tool calls through Rampart.
+
+### Cline
+
+```bash
+rampart setup cline
+```
+
+Installs PreToolUse hooks in Cline's settings.json (VS Code extension). Supports both local and remote VS Code environments.
+
+**What it does:**
+- Adds hooks to `~/.config/Cline/settings.json` or `~/.vscode/extensions/`
+- Covers exec, read, write, edit tools
+- Auto-discovers serve URL and token
+
+### OpenClaw
+
+```bash
+rampart setup openclaw
+```
+
+Installs shell shim and systemd/launchd service for OpenClaw protection.
+
+**What it does:**
+- Creates `~/.local/bin/rampart-shim` (shell wrapper)
+- Installs systemd user service (Linux) or LaunchAgent (macOS)
+- Generates and persists auth token
+- Optionally patches file tools with `--patch-tools`
+
+**After setup:**
+```bash
+# Configure OpenClaw gateway to use the shim
+export SHELL=~/.local/bin/rampart-shim
+```
+
+### Codex
+
+```bash
+rampart setup codex
+```
+
+**Linux:** Installs wrapper at `~/.local/bin/codex` that intercepts commands.
+
+**macOS:** Use `rampart preload -- codex` instead (LD_PRELOAD approach).
+
+## Flags
+
+<ParamField path="--force" type="boolean" default="false">
+  Overwrite existing hook configuration
+</ParamField>
+
+<ParamField path="--remove" type="boolean" default="false">
+  Uninstall hooks (clean removal)
+</ParamField>
+
+<ParamField path="--patch-tools" type="boolean" default="false">
+  *OpenClaw only:* Also patch file tools (read/write/edit/grep) for full coverage
+</ParamField>
+
+<ParamField path="--port" type="integer" default="19090">
+  *OpenClaw only:* Port for Rampart policy server
+</ParamField>
+
+## Examples
+
+### Initial setup
+
+```bash
+# Interactive wizard (auto-detects agent)
+rampart setup
+
+# Direct setup for Claude Code
+rampart setup claude-code
+
+# Full OpenClaw protection (shell + file tools)
+rampart setup openclaw --patch-tools
+```
+
+### Reconfiguration
+
+```bash
+# Force re-install hooks
+rampart setup claude-code --force
+
+# Update to latest hook configuration
+rampart setup cline --force
+```
+
+### Removal
+
+```bash
+# Uninstall Claude Code hooks
+rampart setup claude-code --remove
+
+# Uninstall OpenClaw integration
+rampart setup openclaw --remove
+```
+
+## Output
+
+### Success (Claude Code)
+
+```
+✓ Rampart hook installed in ~/.claude/settings.json
+  Hook command: /usr/local/bin/rampart hook
+  Claude Code will now route ALL tool calls through Rampart.
+  (Bash, Read, Write, Edit, Fetch, Task, and any new tools)
+  Run 'claude' normally — no wrapper needed.
+
+  Dashboard: token auto-detected from ~/.rampart/token ✓
+  Events will appear in the dashboard automatically.
+
+Tip: export RAMPART_SESSION=my-project in your shell profile to tag audit events with a project name.
+```
+
+### Success (OpenClaw)
+
+```
+✓ Default policy written to ~/.rampart/policies/standard.yaml
+✓ Systemd service written to ~/.config/systemd/user/rampart-proxy.service
+✓ Shell shim installed at ~/.local/bin/rampart-shim
+✓ Rampart proxy service started
+
+Next steps:
+  1. Set SHELL=~/.local/bin/rampart-shim in your OpenClaw gateway config
+  2. Restart the OpenClaw gateway
+  3. Every command will now go through Rampart's policy engine
+
+Policy: ~/.rampart/policies/standard.yaml
+Audit:  ~/.rampart/audit
+Watch:  rampart watch --audit-dir ~/.rampart/audit
+```
+
+## Verification
+
+After setup, verify the integration:
+
+```bash
+# Health check
+rampart doctor
+
+# Test a command
+rampart test "ls -la"
+
+# Watch live events
+rampart watch
+```
+
+## Troubleshooting
+
+### Claude Code: hooks not firing
+
+**Check PATH:**
+```bash
+which rampart
+# Should return: /usr/local/bin/rampart or similar
+```
+
+**Fix:**
+```bash
+# Add rampart to PATH
+export PATH="$PATH:$(go env GOPATH)/bin"
+
+# Or use absolute path in settings.json
+rampart setup claude-code --force
+```
+
+### OpenClaw: commands not blocked
+
+**Check service status:**
+```bash
+# Linux
+systemctl --user status rampart-proxy
+
+# macOS
+launchctl list | grep rampart
+```
+
+**Fix:**
+```bash
+# Restart service
+rampart setup openclaw --force
+```
+
+### File tools still bypassing policy
+
+**OpenClaw:** Re-run with `--patch-tools` after OpenClaw upgrades:
+```bash
+rampart setup openclaw --patch-tools --force
+```
+
+Patches are applied to `node_modules` which get replaced on update.
+
+## Exit codes
+
+- `0` - Setup successful
+- `1` - Setup failed (check error message)
+
+## See also
+
+- [rampart quickstart](/cli/quickstart) - Automated setup
+- [rampart doctor](/cli/doctor) - Verify installation
+- [rampart serve](/cli/serve) - Background service
+- [rampart hook](/cli/hook) - Hook implementation details

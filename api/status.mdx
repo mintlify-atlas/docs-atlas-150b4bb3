@@ -1,0 +1,343 @@
+---
+title: 'Status & Health'
+description: 'Server status and health check endpoints'
+---
+
+## Status Endpoint
+
+```http
+GET /v1/status
+```
+
+Returns current runtime status and policy counts.
+
+### Request Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for authentication
+</ParamField>
+
+### Response Fields
+
+<ResponseField name="config_path" type="string" required>
+  Path to active policy configuration file
+</ResponseField>
+
+<ResponseField name="mode" type="string" required>
+  Operation mode: `enforce`, `monitor`, or `disabled`
+</ResponseField>
+
+<ResponseField name="default_action" type="string" required>
+  Default policy action: `allow` or `deny`
+</ResponseField>
+
+<ResponseField name="policy_count" type="integer" required>
+  Number of loaded policies
+</ResponseField>
+
+<ResponseField name="rule_count" type="integer" required>
+  Total number of rules across all policies
+</ResponseField>
+
+<ResponseField name="call_counts" type="object" required>
+  Tool call counts in the last hour, keyed by tool name
+  
+  Example: `{"exec": 42, "read": 15, "write": 8}`
+</ResponseField>
+
+### Example
+
+```bash
+TOKEN="$(cat ~/.rampart/token)"
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:9090/v1/status"
+```
+
+**Response (200 OK):**
+```json
+{
+  "config_path": "/home/user/.rampart/policies/standard.yaml",
+  "mode": "enforce",
+  "default_action": "allow",
+  "policy_count": 5,
+  "rule_count": 23,
+  "call_counts": {
+    "exec": 147,
+    "read": 89,
+    "write": 34,
+    "fetch": 12
+  }
+}
+```
+
+### Status Codes
+
+| Status | Meaning |
+|--------|----------|
+| `200 OK` | Status retrieved successfully |
+| `401 Unauthorized` | Missing or invalid bearer token |
+
+---
+
+## Policy Endpoint
+
+```http
+GET /v1/policy
+```
+
+Alias of `GET /v1/status`. Returns the same response.
+
+### Example
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:9090/v1/policy"
+```
+
+---
+
+## Health Check
+
+```http
+GET /healthz
+```
+
+Unauthenticated health check endpoint.
+
+<Info>
+This endpoint does **not** require authentication. Use it for monitoring, load balancers, or automated health checks.
+</Info>
+
+### Request Headers
+
+None required.
+
+### Response Fields
+
+<ResponseField name="status" type="string" required>
+  Health status: `ok`
+</ResponseField>
+
+<ResponseField name="mode" type="string" required>
+  Operation mode: `enforce`, `monitor`, or `disabled`
+</ResponseField>
+
+<ResponseField name="uptime_seconds" type="integer" required>
+  Server uptime in seconds
+</ResponseField>
+
+<ResponseField name="version" type="string" required>
+  Rampart version (e.g., `v0.7.0`)
+</ResponseField>
+
+### Example
+
+```bash
+curl "http://127.0.0.1:9090/healthz"
+```
+
+**Response (200 OK):**
+```json
+{
+  "status": "ok",
+  "mode": "enforce",
+  "uptime_seconds": 3600,
+  "version": "v0.7.0"
+}
+```
+
+### Status Codes
+
+| Status | Meaning |
+|--------|----------|
+| `200 OK` | Server is healthy |
+
+<Note>
+The health check always returns `200 OK` if the server is running. It does not validate policy configuration or other subsystems.
+</Note>
+
+---
+
+## Common Use Cases
+
+### Monitoring Integration
+
+Poll health endpoint from monitoring systems:
+
+```bash
+# Prometheus-style check
+if curl -sf "http://localhost:9090/healthz" > /dev/null; then
+  echo "rampart_up 1"
+else
+  echo "rampart_up 0"
+fi
+```
+
+### Load Balancer Health Check
+
+```yaml
+# HAProxy configuration
+backend rampart
+  option httpchk GET /healthz
+  server rampart1 127.0.0.1:9090 check
+```
+
+### Status Dashboard
+
+Display server status in a dashboard:
+
+```python
+import requests
+import os
+
+token = open(os.path.expanduser("~/.rampart/token")).read().strip()
+response = requests.get(
+    "http://localhost:9090/v1/status",
+    headers={"Authorization": f"Bearer {token}"}
+)
+
+status = response.json()
+print(f"Mode: {status['mode']}")
+print(f"Policies: {status['policy_count']}")
+print(f"Rules: {status['rule_count']}")
+print(f"Call counts: {status['call_counts']}")
+```
+
+### CI Health Check
+
+Verify Rampart is running before tests:
+
+```bash
+#!/bin/bash
+# Wait for Rampart to be ready
+
+for i in {1..30}; do
+  if curl -sf http://localhost:9090/healthz > /dev/null; then
+    echo "Rampart is ready"
+    exit 0
+  fi
+  echo "Waiting for Rampart... ($i/30)"
+  sleep 1
+done
+
+echo "Rampart failed to start"
+exit 1
+```
+
+### Uptime Tracking
+
+Track server uptime:
+
+```bash
+health=$(curl -s http://localhost:9090/healthz)
+uptime=$(echo "$health" | jq -r '.uptime_seconds')
+echo "Rampart uptime: $uptime seconds"
+```
+
+---
+
+## Operation Modes
+
+### Enforce Mode
+
+```json
+{
+  "mode": "enforce",
+  "default_action": "allow"
+}
+```
+
+Deny decisions block execution (`403 Forbidden`). Approval-required decisions queue for human review (`202 Accepted`).
+
+### Monitor Mode
+
+```json
+{
+  "mode": "monitor",
+  "default_action": "allow"
+}
+```
+
+All decisions log to audit trail, but nothing is blocked. Useful for testing policies before enforcement.
+
+### Disabled Mode
+
+```json
+{
+  "mode": "disabled",
+  "default_action": "allow"
+}
+```
+
+Policy evaluation disabled. All tool calls are allowed with minimal logging.
+
+---
+
+## Call Counts Window
+
+The `call_counts` field includes tool calls from the **last hour** only. This rolling window resets every hour.
+
+**Example:**
+```json
+{
+  "call_counts": {
+    "exec": 147,
+    "read": 89,
+    "write": 34,
+    "fetch": 12
+  }
+}
+```
+
+This shows:
+- 147 `exec` tool calls in the last hour
+- 89 `read` tool calls in the last hour
+- 34 `write` tool calls in the last hour
+- 12 `fetch` tool calls in the last hour
+
+---
+
+## Version Information
+
+The health check includes the Rampart version:
+
+```bash
+curl -s http://localhost:9090/healthz | jq -r '.version'
+# Output: v0.7.0
+```
+
+Use this to verify deployment versions or track upgrades.
+
+---
+
+## Error Responses
+
+### Unauthorized (Status Endpoint)
+
+```bash
+curl "http://127.0.0.1:9090/v1/status"
+```
+
+**Response (401 Unauthorized):**
+```json
+{
+  "error": "missing authorization header"
+}
+```
+
+<Note>
+The `/healthz` endpoint is the only status endpoint that does not require authentication.
+</Note>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Tool Evaluation" icon="gavel" href="/api/tool-evaluation">
+    Evaluate tool calls against policies
+  </Card>
+  <Card title="Events" icon="bolt" href="/api/events">
+    Real-time event streaming
+  </Card>
+</CardGroup>

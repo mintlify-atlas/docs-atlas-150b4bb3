@@ -1,0 +1,266 @@
+---
+title: rampart wrap
+description: Wrap a process with policy enforcement
+---
+
+Wraps any process with Rampart policy enforcement by setting `$SHELL` to a policy-checking shim.
+
+## Usage
+
+```bash
+rampart wrap -- <command> [args...]
+```
+
+Note the `--` separator before the command.
+
+## How it works
+
+1. Starts an embedded policy engine + HTTP proxy
+2. Creates a shell shim that checks commands before execution
+3. Sets `$SHELL` to the shim path
+4. Runs your command with the wrapped environment
+5. Every shell command goes through Rampart first
+
+## Flags
+
+<ParamField path="--mode" type="string" default="enforce">
+  Mode: `enforce` (block denies) or `monitor` (log only)
+</ParamField>
+
+<ParamField path="--audit-dir" type="string" default="~/.rampart/audit">
+  Directory for audit logs
+</ParamField>
+
+<ParamField path="--token" type="string">
+  Bearer token for proxy auth (auto-generated if not set)
+</ParamField>
+
+## Examples
+
+### Wrap any agent
+
+```bash
+# Wrap Aider
+rampart wrap -- aider
+
+# Wrap OpenCode
+rampart wrap -- opencode
+
+# Wrap Continue
+rampart wrap -- continue
+
+# Wrap custom Python agent
+rampart wrap -- python my_agent.py
+
+# Wrap Node.js agent
+rampart wrap -- node agent.js
+```
+
+### Monitor mode
+
+```bash
+# Log only, don't block
+rampart wrap --mode monitor -- aider
+```
+
+### Custom audit directory
+
+```bash
+# Use project-specific audit directory
+rampart wrap --audit-dir ./audit -- aider
+```
+
+## Output
+
+### Startup
+
+```
+INFO proxy: listening url=http://127.0.0.1:52341
+```
+
+### During execution
+
+Commands are evaluated silently. View events with:
+
+```bash
+# In another terminal
+rampart watch
+
+# Or tail audit log
+rampart audit tail --follow
+```
+
+### Blocked command
+
+```bash
+# Agent tries: rm -rf /tmp/*
+🛡️ Rampart blocked: rm -rf /tmp/*
+   Reason: Destructive command blocked
+```
+
+### Shutdown
+
+```
+Rampart: 247 calls evaluated, 3 denied, 12 logged
+```
+
+## How shell wrapping works
+
+### Shell shim
+
+Rampart creates a temporary script that:
+
+1. Intercepts `bash -c "command"`
+2. Sends command to proxy for evaluation
+3. Blocks if denied (exit 126)
+4. Executes if allowed
+
+**Shim logic:**
+```bash
+if [ "$1" = "-c" ]; then
+    # Encode command and send to proxy
+    DECISION=$(curl -X POST ${RAMPART_URL}/v1/preflight/exec ...)
+    
+    if [ denied ]; then
+        echo "rampart: blocked" >&2
+        exit 126
+    fi
+    
+    exec $REAL_SHELL -c "$CMD"
+fi
+```
+
+### PATH manipulation
+
+Rampart also creates wrappers at `/tmp/rampart-shells-*/` for:
+- `bash`
+- `zsh`
+- `sh`
+
+These intercept hardcoded shell calls (agents that ignore `$SHELL`).
+
+## Coverage
+
+**Covered:**
+- Shell commands via `$SHELL`
+- Hardcoded `/bin/bash -c` calls
+- Hardcoded `/bin/zsh -c` calls
+- Subprocess spawns that read `$SHELL`
+
+**Not covered:**
+- Direct syscalls (use `rampart preload` instead)
+- Statically-linked binaries
+- Non-shell command execution (Python `os.system`, Node.js `child_process.execSync`)
+
+## Policy loading
+
+Wrap loads policies from:
+
+1. `--config` file (global flag)
+2. `~/.rampart/policies/standard.yaml`
+3. Embedded standard policy (fallback)
+
+**Custom policy:**
+```bash
+rampart wrap --config custom.yaml -- aider
+```
+
+## Wrap vs. other integration methods
+
+| Method | Coverage | Setup | Use case |
+|--------|----------|-------|----------|
+| **wrap** | Shell commands only | Zero config | Agents that read `$SHELL` (Aider, OpenCode, Continue) |
+| **preload** | All syscalls | Requires librampart | Agents with no `$SHELL` support or hardcoded paths |
+| **setup** | Depends on agent | One-time | Native hooks (Claude Code, Cline) |
+| **mcp** | MCP tools only | Config update | MCP servers |
+
+## Troubleshooting
+
+### Commands still bypassing
+
+**Check if agent uses $SHELL:**
+```bash
+# Inside wrapped session
+echo $SHELL
+# Should show: /tmp/rampart-shim-XXXXXX
+```
+
+**If not, agent is hardcoding shell paths. Use preload instead:**
+```bash
+rampart preload -- agent
+```
+
+### Wrap fails to start
+
+**Check port availability:**
+```bash
+lsof -i :52341  # or whatever port was assigned
+```
+
+**Check policy file:**
+```bash
+rampart policy lint
+```
+
+### Performance concerns
+
+Each command adds ~4μs of policy evaluation overhead. Preflight checks use HTTP but are local (localhost loopback).
+
+**Measured latency:**
+- Policy check: 4μs
+- HTTP round-trip (localhost): less than 1ms
+- Total overhead: ~1ms per command
+
+Invisible for normal agent workflows.
+
+## Exit codes
+
+- `0` - Wrapped command exited successfully
+- `1` - Wrapped command failed
+- `126` - Command was blocked by policy
+- Other - Wrapped command's exit code
+
+## Examples
+
+### Wrap Aider with custom policy
+
+```bash
+# Create strict policy
+rampart init --profile paranoid
+
+# Wrap Aider
+rampart wrap --config ~/.rampart/policies/paranoid.yaml -- aider
+```
+
+### Monitor mode for testing
+
+```bash
+# Learn what your agent does without blocking
+rampart wrap --mode monitor -- python my_agent.py
+
+# Review audit
+rampart audit stats
+
+# Build allowlist from audit
+rampart policy generate --from-audit ~/.rampart/audit > custom.yaml
+```
+
+### Multi-terminal workflow
+
+```bash
+# Terminal 1: Wrap agent
+rampart wrap -- aider
+
+# Terminal 2: Watch events
+rampart watch
+
+# Terminal 3: Approve if needed
+rampart pending
+rampart approve <id>
+```
+
+## See also
+
+- [rampart preload](/cli/preload) - LD_PRELOAD interception
+- [rampart setup](/cli/setup) - Native agent hooks
+- [rampart mcp](/cli/mcp) - MCP server proxy

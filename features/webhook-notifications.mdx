@@ -1,0 +1,506 @@
+---
+title: Webhook Notifications
+description: Real-time Discord and Slack notifications for denied commands and approvals
+---
+
+# Webhook Notifications
+
+Get real-time alerts when Rampart blocks something or needs your approval. Works with Discord, Slack, or any HTTP endpoint.
+
+## When to Use Webhooks
+
+Webhook notifications are useful when:
+
+- **You're away from the terminal** and want to know when commands are blocked
+- **Multiple team members** need visibility into agent activity
+- **Approvals are pending** and you want to respond from your phone
+- **Security events** need immediate attention
+
+## Configuration
+
+<Steps>
+
+### Add Webhook URL to Policy
+
+Edit your policy file (`~/.rampart/policies/custom.yaml`):
+
+```yaml
+version: "1"
+default_action: allow
+
+notify:
+  url: "https://discord.com/api/webhooks/your/webhook"
+  # Or Slack: "https://hooks.slack.com/services/your/webhook"
+  on: ["deny"]  # Notify only on denied commands
+
+policies:
+  # ... your policies
+```
+
+### Choose Events to Notify
+
+The `on` field controls which events trigger notifications:
+
+```yaml
+notify:
+  url: "https://discord.com/api/webhooks/your/webhook"
+  on: ["deny", "ask"]  # Notify on denies and approvals
+```
+
+Options:
+- `deny` — Blocked commands
+- `ask` — Approval requests
+- `watch` — Logged/watched commands
+- `allow` — Allowed commands (noisy, not recommended)
+
+### Reload Policy
+
+```bash
+rampart serve --reload
+```
+
+Or restart the service:
+
+```bash
+rampart serve stop
+rampart serve install
+```
+
+</Steps>
+
+## Discord Webhooks
+
+### Creating a Discord Webhook
+
+1. Open your Discord server
+2. Go to **Server Settings** → **Integrations** → **Webhooks**
+3. Click **New Webhook**
+4. Name it "Rampart Alerts"
+5. Select the channel (e.g., `#security-alerts`)
+6. Click **Copy Webhook URL**
+
+### Discord Configuration
+
+```yaml
+notify:
+  url: "https://discord.com/api/webhooks/1234567890/abcdef..."
+  on: ["deny", "ask"]
+```
+
+### Example Discord Message
+
+When a command is blocked, Discord receives:
+
+```json
+{
+  "embeds": [
+    {
+      "title": "🔴 Command Denied",
+      "description": "Destructive command blocked",
+      "color": 15158332,
+      "fields": [
+        {
+          "name": "Command",
+          "value": "`rm -rf /tmp/*`",
+          "inline": false
+        },
+        {
+          "name": "Policy",
+          "value": "block-destructive",
+          "inline": true
+        },
+        {
+          "name": "Agent",
+          "value": "claude-code",
+          "inline": true
+        },
+        {
+          "name": "Session",
+          "value": "myapp/main",
+          "inline": true
+        },
+        {
+          "name": "Time",
+          "value": "2026-03-03 14:23:05 UTC",
+          "inline": false
+        }
+      ],
+      "footer": {
+        "text": "Rampart Security"
+      }
+    }
+  ]
+}
+```
+
+Renders as:
+
+```
+🔴 Command Denied
+Destructive command blocked
+
+Command: rm -rf /tmp/*
+Policy: block-destructive    Agent: claude-code    Session: myapp/main
+Time: 2026-03-03 14:23:05 UTC
+
+Rampart Security
+```
+
+## Slack Webhooks
+
+### Creating a Slack Webhook
+
+1. Go to https://api.slack.com/apps
+2. Click **Create New App** → **From scratch**
+3. Name: "Rampart Alerts", select your workspace
+4. Go to **Incoming Webhooks** → **Activate Incoming Webhooks**
+5. Click **Add New Webhook to Workspace**
+6. Select the channel (e.g., `#security-alerts`)
+7. Click **Copy** to get the webhook URL
+
+### Slack Configuration
+
+```yaml
+notify:
+  url: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXX"
+  on: ["deny", "ask"]
+```
+
+### Example Slack Message
+
+When a command is blocked, Slack receives:
+
+```json
+{
+  "attachments": [
+    {
+      "color": "danger",
+      "fallback": "Command denied: rm -rf /tmp/*",
+      "title": "🔴 Command Denied",
+      "text": "Destructive command blocked",
+      "fields": [
+        {
+          "title": "Command",
+          "value": "`rm -rf /tmp/*`",
+          "short": false
+        },
+        {
+          "title": "Policy",
+          "value": "block-destructive",
+          "short": true
+        },
+        {
+          "title": "Agent",
+          "value": "claude-code",
+          "short": true
+        },
+        {
+          "title": "Session",
+          "value": "myapp/main",
+          "short": true
+        },
+        {
+          "title": "Time",
+          "value": "2026-03-03 14:23:05 UTC",
+          "short": false
+        }
+      ],
+      "footer": "Rampart Security"
+    }
+  ]
+}
+```
+
+## Approval Notifications
+
+When an `action: ask` rule triggers, the notification includes approve/deny links:
+
+### Discord Approval Message
+
+```json
+{
+  "embeds": [
+    {
+      "title": "👤 Approval Required",
+      "description": "Production deployment requires approval",
+      "color": 3447003,
+      "fields": [
+        {
+          "name": "Command",
+          "value": "`kubectl apply -f prod.yaml`",
+          "inline": false
+        },
+        {
+          "name": "Policy",
+          "value": "production-deploys",
+          "inline": true
+        },
+        {
+          "name": "Agent",
+          "value": "claude-code",
+          "inline": true
+        },
+        {
+          "name": "Session",
+          "value": "myapp/main",
+          "inline": true
+        },
+        {
+          "name": "Actions",
+          "value": "[Approve](https://yourserver/approve?id=abc123&sig=...) | [Deny](https://yourserver/deny?id=abc123&sig=...)",
+          "inline": false
+        }
+      ],
+      "footer": {
+        "text": "Rampart Security · Expires in 1 hour"
+      }
+    }
+  ]
+}
+```
+
+Click **Approve** or **Deny** to resolve without touching the terminal.
+
+<Note>
+Approval links are HMAC-signed with your Rampart token. They expire after the approval timeout (default: 1 hour).
+</Note>
+
+## Custom Webhook Endpoints
+
+Rampart sends a JSON payload to your webhook URL:
+
+```json
+{
+  "timestamp": "2026-03-03T14:23:05Z",
+  "decision": "deny",
+  "tool": "exec",
+  "command": "rm -rf /tmp/*",
+  "policy": "block-destructive",
+  "message": "Destructive command blocked",
+  "agent": "claude-code",
+  "session": "myapp/main",
+  "event_id": "evt_def456"
+}
+```
+
+### Approval Payload
+
+```json
+{
+  "timestamp": "2026-03-03T14:23:10Z",
+  "decision": "ask",
+  "tool": "exec",
+  "command": "kubectl apply -f prod.yaml",
+  "policy": "production-deploys",
+  "message": "Production deployment requires approval",
+  "agent": "claude-code",
+  "session": "myapp/main",
+  "event_id": "evt_ghi789",
+  "approval_id": "abc123",
+  "approve_url": "https://yourserver/approve?id=abc123&sig=...",
+  "deny_url": "https://yourserver/deny?id=abc123&sig=..."
+}
+```
+
+### HTTP Request Details
+
+```http
+POST /your/webhook HTTP/1.1
+Host: yourserver.com
+Content-Type: application/json
+User-Agent: Rampart/v0.7.0
+X-Rampart-Event: deny
+X-Rampart-Event-ID: evt_def456
+
+{...payload...}
+```
+
+### Webhook Verification
+
+Verify requests came from Rampart by checking the `X-Rampart-Signature` header:
+
+```python
+import hmac
+import hashlib
+
+def verify_rampart_webhook(payload, signature, secret):
+    expected = hmac.new(
+        secret.encode(),
+        payload.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(signature, expected)
+
+# In your webhook handler:
+if not verify_rampart_webhook(request.body, request.headers['X-Rampart-Signature'], RAMPART_TOKEN):
+    return 403  # Unauthorized
+```
+
+## Multiple Webhooks
+
+Send notifications to multiple endpoints:
+
+```yaml
+notify:
+  webhooks:
+    - url: "https://discord.com/api/webhooks/your/webhook"
+      on: ["deny"]
+    - url: "https://hooks.slack.com/services/your/webhook"
+      on: ["ask"]
+    - url: "https://yourserver.com/rampart/events"
+      on: ["deny", "ask", "watch"]
+```
+
+## Conditional Notifications
+
+Notify only for specific sessions or policies:
+
+```yaml
+notify:
+  url: "https://discord.com/api/webhooks/your/webhook"
+  on: ["deny"]
+  when:
+    session_matches: ["myapp/main", "myapp/production"]
+    policy_matches: ["block-destructive", "block-credential-access"]
+```
+
+This sends notifications only for:
+- Denied commands
+- On `main` or `production` branches
+- Matching the `block-destructive` or `block-credential-access` policies
+
+## Retry Behavior
+
+Rampart retries failed webhook deliveries:
+
+- **Initial attempt**: Immediate
+- **Retry 1**: 1 second later
+- **Retry 2**: 5 seconds later
+- **Retry 3**: 15 seconds later
+- **Max retries**: 3
+
+After 3 failures, the notification is dropped and logged:
+
+```
+WARN webhook delivery failed after 3 retries url=https://discord.com/... error="connection timeout"
+```
+
+## Webhook Timeout
+
+Webhook requests timeout after **5 seconds**. Configure with:
+
+```yaml
+notify:
+  url: "https://discord.com/api/webhooks/your/webhook"
+  timeout: 10s  # 10 second timeout
+  on: ["deny"]
+```
+
+## Testing Webhooks
+
+Test your webhook configuration:
+
+```bash
+# Trigger a deny event
+rampart test "rm -rf /"
+
+# Expected: Webhook notification sent
+```
+
+Check the logs:
+
+```bash
+rampart log | grep webhook
+# INFO webhook notification sent url=https://discord.com/... status=204
+```
+
+## Debugging Failed Webhooks
+
+Enable debug logging:
+
+```bash
+rampart serve --log-level debug
+```
+
+Look for webhook logs:
+
+```
+DEBUG webhook request url=https://discord.com/... payload={...}
+INFO webhook response status=204 latency=123ms
+```
+
+Common issues:
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `connection timeout` | Webhook URL unreachable | Check network, firewall rules |
+| `401 Unauthorized` | Invalid webhook URL | Regenerate webhook in Discord/Slack |
+| `429 Too Many Requests` | Rate limited | Reduce notification frequency |
+| `500 Internal Server Error` | Webhook service down | Retry later, check status page |
+
+## Rate Limiting
+
+Discord and Slack have rate limits:
+
+- **Discord**: 30 requests per 60 seconds per webhook
+- **Slack**: 1 request per second per webhook
+
+Rampart respects `Retry-After` headers automatically.
+
+## Security Best Practices
+
+1. **Use HTTPS**: Never send webhooks over plain HTTP
+2. **Rotate webhook URLs**: Regenerate if leaked or compromised
+3. **Filter sensitive data**: Don't include secrets in notifications
+4. **Verify signatures**: Validate `X-Rampart-Signature` in custom endpoints
+5. **Limit webhook permissions**: Use read-only or restricted channels
+
+## Example: Full Configuration
+
+```yaml
+version: "1"
+default_action: allow
+
+notify:
+  webhooks:
+    # Discord: all denies and approvals
+    - url: "https://discord.com/api/webhooks/1234567890/abcdef..."
+      on: ["deny", "ask"]
+      timeout: 10s
+
+    # Slack: production branch only
+    - url: "https://hooks.slack.com/services/T00000000/B00000000/XXXX"
+      on: ["deny"]
+      when:
+        session_matches: ["myapp/main", "myapp/production"]
+
+    # Custom endpoint: all events for SIEM
+    - url: "https://siem.company.com/rampart/events"
+      on: ["deny", "ask", "watch"]
+      timeout: 30s
+
+policies:
+  - name: block-destructive
+    match:
+      tool: ["exec"]
+    rules:
+      - action: deny
+        when:
+          command_matches: ["rm -rf /", "mkfs*"]
+        message: "Destructive command blocked"
+
+  - name: production-deploys
+    match:
+      tool: ["exec"]
+    rules:
+      - action: ask
+        when:
+          command_matches: ["kubectl apply *"]
+        message: "Production deployment requires approval"
+```
+
+## See Also
+
+- [Approval Flow](/features/approval-flow) — Human-in-the-loop approvals
+- [Live Dashboard](/features/live-dashboard) — Web UI for monitoring
+- [Audit Trail](/features/audit-trail) — Hash-chained audit logging

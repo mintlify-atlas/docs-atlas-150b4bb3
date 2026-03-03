@@ -1,0 +1,312 @@
+---
+title: Built-in Profiles
+description: Pre-configured policy presets for different security postures
+---
+
+Rampart ships with four built-in profiles. Choose based on your threat model and workflow.
+
+## Profiles
+
+| Profile | Default Action | Use Case |
+|---------|----------------|----------|
+| `standard` | allow | Block dangerous, watch suspicious, allow the rest |
+| `ci` | allow | Strict mode for headless/CI — all approvals become denies |
+| `paranoid` | deny | Explicit allowlist for everything |
+| `yolo` | allow | Log-only, no blocking |
+
+## standard (Recommended)
+
+Balanced security for interactive development.
+
+```bash
+rampart init --profile standard
+```
+
+**What it does:**
+- Blocks destructive commands (`rm -rf /`, `mkfs`, `dd of=/dev/sda`)
+- Blocks credential access (`.ssh/id_*`, `.aws/credentials`, `.env`)
+- Blocks reverse shells and piped execution (`curl | bash`)
+- Blocks exfiltration domains (`*.ngrok.io`, `webhook.site`)
+- Requires approval for `sudo`
+- Watches environment variable access
+- Allows everything else
+
+**Example rules from standard.yaml:**
+
+```yaml
+version: "1"
+default_action: deny  # Note: standard uses deny-by-default
+
+policies:
+  - name: block-destructive
+    match:
+      tool: ["exec"]
+    rules:
+      - action: deny
+        when:
+          command_matches:
+            - "rm -rf /"
+            - "rm -rf ~/**"
+            - "mkfs*"
+            - "dd **of=/dev/sd**"
+            - ":(){ :|:& };:"  # Fork bomb
+          command_not_matches:
+            - "rm -rf /tmp/**"
+        message: "Destructive command blocked"
+
+  - name: block-credential-access
+    priority: 1
+    match:
+      tool: ["read"]
+    rules:
+      - action: deny
+        when:
+          path_matches:
+            - "**/.ssh/id_*"
+            - "**/.aws/credentials"
+            - "**/.env"
+          path_not_matches:
+            - "**/*.pub"
+            - "**/.env.example"
+        message: "Credential file access blocked"
+
+  - name: block-piped-execution
+    match:
+      tool: ["exec"]
+    rules:
+      - action: deny
+        when:
+          command_matches:
+            - "curl ** | bash"
+            - "wget ** | sh"
+          command_contains:
+            - "<(curl"  # Process substitution
+            - "base64 -d | bash"
+        message: "Piped execution blocked (supply chain risk)"
+
+  - name: require-sudo-approval
+    match:
+      tool: ["exec"]
+    rules:
+      - action: ask
+        when:
+          command_matches: ["sudo **"]
+        message: "sudo requires approval"
+
+  - name: block-exfil-domains
+    match:
+      tool: ["fetch"]
+    rules:
+      - action: deny
+        when:
+          domain_matches:
+            - "*.ngrok.io"
+            - "*.requestbin.com"
+            - "webhook.site"
+        message: "Potential data exfiltration domain blocked"
+```
+
+## ci (Headless Mode)
+
+Strict preset for CI/CD and unattended agents. All interactive approvals become hard denies.
+
+```bash
+rampart init --profile ci
+```
+
+**What it does:**
+- Same rules as `standard`
+- Converts `action: ask` to `action: deny` (no human in the loop)
+- Ideal for GitHub Actions, GitLab CI, Jenkins, etc.
+
+**Key difference:**
+
+```yaml
+# standard.yaml
+- action: ask
+  when:
+    command_matches: ["sudo **"]
+  message: "sudo requires approval"
+
+# ci.yaml (same rule but deny instead of ask)
+- action: deny
+  when:
+    command_matches: ["sudo **"]
+  message: "sudo requires approval"
+```
+
+See [CI/Headless Agents](/guides/ci-headless) for setup details.
+
+## paranoid (Deny-by-Default)
+
+Explicit allowlist. Nothing runs unless you permit it.
+
+```bash
+rampart init --profile paranoid
+```
+
+**What it does:**
+- `default_action: deny`
+- Only whitelisted commands, files, and domains are allowed
+- Use this for high-risk environments or adversarial threat models
+
+**Example rules from paranoid.yaml:**
+
+```yaml
+version: "1"
+default_action: deny
+
+policies:
+  - name: dev-tools-allowlist
+    priority: 10
+    match:
+      tool: ["exec"]
+    rules:
+      - action: allow
+        when:
+          command_matches:
+            - "git *"
+            - "npm *"
+            - "python3 *"
+            - "go *"
+            - "cat *"
+            - "ls *"
+            - "grep *"
+        message: "Allowed dev tool"
+
+  - name: read-allowlist
+    priority: 10
+    match:
+      tool: ["read"]
+    rules:
+      - action: allow
+        when:
+          path_matches:
+            - "**/*.go"
+            - "**/*.py"
+            - "**/*.js"
+            - "**/*.md"
+            - "**/*.yaml"
+        message: "Allowed source file read"
+
+  - name: fetch-allowlist
+    priority: 10
+    match:
+      tool: ["fetch"]
+    rules:
+      - action: allow
+        when:
+          domain_matches:
+            - "*.github.com"
+            - "*.npmjs.org"
+            - "localhost"
+        message: "Allowed package registry/docs fetch"
+
+  # Credential blocks still apply even with allowlist
+  - name: block-credential-access
+    priority: 1
+    match:
+      tool: ["read"]
+    rules:
+      - action: deny
+        when:
+          path_matches:
+            - "**/.ssh/id_*"
+            - "**/.aws/credentials"
+            - "**/.env"
+        message: "Credential file access blocked"
+```
+
+## yolo (Audit-Only)
+
+Log everything, block nothing. For monitoring without enforcement.
+
+```bash
+rampart init --profile yolo
+```
+
+**What it does:**
+- `default_action: allow`
+- All actions use `action: log` (alias: `watch`)
+- Full audit trail, zero blocking
+
+**Example rules from yolo.yaml:**
+
+```yaml
+version: "1"
+default_action: allow
+
+policies:
+  - name: log-everything
+    match:
+      tool: ["exec", "read", "write"]
+    rules:
+      - action: log
+        when:
+          default: true
+        message: "Audit-only mode: all actions logged"
+```
+
+Use this when:
+- You want to observe agent behavior without interference
+- You're testing a new agent and want to see what it tries to do
+- You need a compliance audit trail but can't block operations
+
+## Switching Profiles
+
+```bash
+# Reinitialize with a different profile
+rampart init --profile paranoid --force
+
+# Or manually copy from the built-in policies directory
+cp ~/.rampart/policies/paranoid.yaml ~/.rampart/policies/active.yaml
+```
+
+The `--force` flag replaces `standard.yaml`, `paranoid.yaml`, `ci.yaml`, and `yolo.yaml` but never touches `custom.yaml`.
+
+## Customizing Profiles
+
+Don't edit the built-in profiles directly — they're overwritten by `rampart upgrade`. Instead:
+
+1. **Add rules to custom.yaml**
+
+   ```bash
+   vim ~/.rampart/policies/custom.yaml
+   ```
+
+   Your rules merge with the active profile.
+
+2. **Use project policies**
+
+   Add `.rampart/policy.yaml` to your repo for project-specific rules. See [Project Policies](/policies/project-policies).
+
+3. **Copy and modify**
+
+   ```bash
+   cp ~/.rampart/policies/standard.yaml ~/.rampart/policies/my-profile.yaml
+   vim ~/.rampart/policies/my-profile.yaml
+   ```
+
+   Then pass `--config ~/.rampart/policies/my-profile.yaml` to `rampart serve`.
+
+## Policy Evaluation Order
+
+When multiple policies are active:
+
+1. **Priority** — policies are sorted by `priority` (lower = first)
+2. **Deny always wins** — if any policy denies, the action is denied
+3. **Custom rules merge with built-in profiles**
+
+Example:
+
+```bash
+# Active: standard.yaml + custom.yaml
+# If standard.yaml denies "rm -rf /" and custom.yaml allows it,
+# the deny wins.
+```
+
+## See Also
+
+- [Writing Policies](/policies/writing-policies) — Full YAML schema reference
+- [Project Policies](/policies/project-policies) — Repo-specific rules
+- [Testing Policies](/policies/testing-policies) — Validate with `rampart test`

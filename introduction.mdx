@@ -1,0 +1,97 @@
+---
+title: Introduction
+description: The security layer for AI coding agents
+---
+
+<img src="/images/hero.svg" alt="Rampart - Security layer for AI coding agents" />
+
+## The security layer for AI coding agents
+
+Claude Code's `--dangerously-skip-permissions` mode — and similar autonomous modes in Cline and Codex — give agents unrestricted shell access. Rampart sits between the agent and your system: every command, file access, and network request is evaluated against your YAML policy before it executes. Dangerous commands are blocked in microseconds. Everything is logged.
+
+One command to get protected:
+
+```bash
+rampart setup claude-code
+```
+
+`rampart quickstart` auto-detects Claude Code or Cline, installs `rampart serve` as a boot service, configures hooks, and runs a health check. Done.
+
+## How it works
+
+Pattern matching handles 95%+ of decisions in microseconds. The optional [rampart-verify](https://github.com/peg/rampart-verify) sidecar adds LLM-based classification for ambiguous commands. All decisions go to a hash-chained audit trail.
+
+Every command Claude executes goes through Rampart's policy engine first:
+
+```
+✅ 14:23:01  exec  "npm test"                          [allow-dev]
+✅ 14:23:03  read  ~/project/src/main.go                [default]
+🔴 14:23:05  exec  "rm -rf /tmp/*"                      [block-destructive]
+🟡 14:23:08  exec  "curl https://api.example.com"       [log-network]
+👤 14:23:10  exec  "kubectl apply -f prod.yaml"         [require-approval]
+```
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Native agent integration" icon="plug" href="/quickstart">
+    Built-in support for Claude Code, Cline, OpenClaw, and universal wrapping for any agent
+  </Card>
+  <Card title="Microsecond policy engine" icon="gauge-high" href="/core/policies">
+    Pattern matching evaluates 95%+ of decisions in single-digit microseconds
+  </Card>
+  <Card title="Hash-chained audit trail" icon="link" href="/core/audit-trail">
+    Tamper-evident JSONL audit logs with SIEM integration (syslog/CEF)
+  </Card>
+  <Card title="Human-in-the-loop approvals" icon="circle-check" href="/core/approval-flow">
+    Native approval prompts for Claude Code, dashboard for other agents
+  </Card>
+  <Card title="Live monitoring dashboard" icon="display" href="/core/dashboard">
+    Real-time TUI and web dashboard with policy testing and approval management
+  </Card>
+  <Card title="Project-local policies" icon="folder" href="/guides/project-policies">
+    Commit `.rampart/policy.yaml` to your repo for team-shared security rules
+  </Card>
+</CardGroup>
+
+## Supported agents
+
+| Agent | Setup | Integration |
+|-------|-------|-------------|
+| **Claude Code** | `rampart setup claude-code` | Native `PreToolUse` hooks — works in `--dangerously-skip-permissions` mode |
+| **Cline** | `rampart setup cline` | Native hooks via settings |
+| **OpenClaw** | `rampart setup openclaw` | Shell shim with human-in-the-loop approval flow |
+| **Any agent** | `rampart wrap -- <agent>` | Shell wrapping via `$SHELL` |
+| **MCP servers** | `rampart mcp -- <server>` | MCP protocol proxy |
+| **System-wide** | `rampart preload -- <cmd>` | LD_PRELOAD syscall interception |
+
+## OWASP coverage
+
+Rampart maps to the [OWASP Top 10 Risks for Agentic AI](https://genai.owasp.org/resource/agentic-ai-threats-and-mitigations/):
+
+- **Excessive Agency** — Policy engine enforces least-privilege per tool call
+- **Unauthorized Tool Use** — Every tool call evaluated before execution
+- **Insecure Tool Implementation** — Response scanning detects credential leaks
+- **Prompt Injection → Tool Abuse** — Pattern matching catches injected commands
+- **Insufficient Audit Trail** — Hash-chained JSONL with SIEM export
+- **Data Exfiltration** — Domain blocking and credential pattern detection
+- **Uncontrolled Autonomy** — Human-in-the-loop for sensitive operations
+
+For a complete threat model analysis, see [THREAT-MODEL.md](https://github.com/peg/rampart/blob/main/docs/THREAT-MODEL.md).
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Rampart on macOS, Linux, or Windows
+  </Card>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Get up and running in under 2 minutes
+  </Card>
+  <Card title="Writing policies" icon="file-lines" href="/core/policies">
+    Learn how to write YAML policies for your agent
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/reference/cli">
+    Complete command reference for all Rampart commands
+  </Card>
+</CardGroup>
